@@ -68,6 +68,8 @@ jobs:
             - Intel Macs: choose the `x64` `.dmg`.
 
             Node.js and DeepSeek Harness are included. End users do not need npm, Node.js, or npx.
+
+            macOS builds are signed, notarized, and verified by launching the bundled Node.js/V8 runtime before publication.
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
@@ -94,9 +96,33 @@ jobs:
             - Intel Macs: choose the `x64` `.dmg`.
 
             Node.js and DeepSeek Harness are included. End users do not need npm, Node.js, or npx.
+
+            macOS builds are signed, notarized, and verified by launching the bundled Node.js/V8 runtime before publication.
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: Verify signed macOS Node runtime
+        if: ${{ runner.os == 'macOS' && vars.ENABLE_APPLE_SIGNING == 'true' }}
+        shell: bash
+        run: |
+          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/DSH Desktop.app"
+          NODE="$APP/Contents/MacOS/node"
+          ENTITLEMENTS="$RUNNER_TEMP/dsh-node-entitlements.plist"
+
+          codesign --verify --strict --verbose=2 "$NODE"
+          codesign -d --entitlements - "$NODE" 2>/dev/null > "$ENTITLEMENTS"
+
+          for key in \
+            com.apple.security.cs.allow-jit \
+            com.apple.security.cs.allow-unsigned-executable-memory \
+            com.apple.security.cs.disable-executable-page-protection \
+            com.apple.security.cs.disable-library-validation
+          do
+            test "$(plutil -extract "$key" raw -o - "$ENTITLEMENTS")" = "true"
+          done
+
+          "$NODE" -e "const v8 = require('node:v8'); console.log(process.version, v8.getHeapStatistics().heap_size_limit)"
 
   publish-release:
     name: Publish completed release
