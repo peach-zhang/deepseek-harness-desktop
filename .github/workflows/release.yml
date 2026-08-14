@@ -102,14 +102,29 @@ jobs:
           prerelease: false
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
-      - name: Verify signed macOS Node runtime
+      - name: Verify signed macOS Node runtime in final DMG
         if: ${{ runner.os == 'macOS' && vars.ENABLE_APPLE_SIGNING == 'true' }}
         shell: bash
         run: |
-          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/DSH Desktop.app"
+          shopt -s nullglob
+          DMGS=(src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
+          test "${#DMGS[@]}" -eq 1
+          DMG="${DMGS[0]}"
+
+          MOUNT_POINT="$RUNNER_TEMP/dsh-dmg-${{ matrix.target }}"
+          mkdir -p "$MOUNT_POINT"
+          cleanup() {
+            hdiutil detach "$MOUNT_POINT" -force >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT_POINT"
+
+          APP="$MOUNT_POINT/DSH Desktop.app"
           NODE="$APP/Contents/MacOS/node"
           ENTITLEMENTS="$RUNNER_TEMP/dsh-node-entitlements.plist"
 
+          test -x "$NODE"
           codesign --verify --strict --verbose=2 "$NODE"
           codesign -d --entitlements - "$NODE" 2>/dev/null > "$ENTITLEMENTS"
 
