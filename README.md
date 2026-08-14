@@ -1,5 +1,7 @@
 # DSH Desktop
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 An unofficial, self-contained Tauri 2 desktop distribution of
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 
