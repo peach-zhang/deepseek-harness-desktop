@@ -100,8 +100,11 @@ async function main() {
 
     await cp(join(runtimePackageDir, 'package.json'), join(dshDir, 'package.json'))
     await cp(join(runtimePackageDir, 'package-lock.json'), join(dshDir, 'package-lock.json'))
-    const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-    const install = spawnSync(npm, ['ci', '--omit=dev', '--no-audit', '--no-fund'], {
+    const npmArgs = ['ci', '--omit=dev', '--no-audit', '--no-fund']
+    const npmCommand = process.platform === 'win32'
+      ? { executable: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', 'npm.cmd', ...npmArgs] }
+      : { executable: 'npm', args: npmArgs }
+    const install = spawnSync(npmCommand.executable, npmCommand.args, {
       cwd: dshDir,
       stdio: 'inherit',
       env: {
@@ -109,6 +112,7 @@ async function main() {
         npm_config_cache: join(projectRoot, '.cache', 'npm'),
       },
     })
+    if (install.error) throw new Error(`Unable to start npm ci: ${install.error.message}`)
     if (install.status !== 0) throw new Error(`npm ci failed with status ${install.status}`)
 
     await copyFile(join(extracted, 'LICENSE'), join(dshDir, 'NODE_LICENSE'))
