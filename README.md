@@ -82,8 +82,9 @@ The release workflow builds these targets on native GitHub-hosted runners:
 - `aarch64-apple-darwin`
 - `x86_64-apple-darwin`
 
-It creates a draft GitHub Release. Inspect the installers and publish the draft
-when verification is complete.
+It creates a draft GitHub Release while installers are building, then publishes
+the release automatically after every platform succeeds. A failed build leaves
+the release as a draft so incomplete artifacts are not published.
 
 ## Signing
 

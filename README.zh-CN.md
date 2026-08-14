@@ -79,7 +79,8 @@ GitHub Actions 会在官方托管的原生运行器上构建以下目标：
 - `aarch64-apple-darwin`
 - `x86_64-apple-darwin`
 
-工作流会创建一个 GitHub 草稿 Release。检查各平台安装包无误后，再手动发布该草稿。
+构建期间，工作流会创建一个 GitHub 草稿 Release。所有平台全部成功后会自动公开发布；
+如果任一平台失败，Release 将保持草稿状态，避免发布不完整的安装包。
 
 ## 应用签名
 
