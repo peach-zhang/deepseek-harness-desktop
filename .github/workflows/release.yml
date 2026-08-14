@@ -126,7 +126,7 @@ jobs:
 
           test -x "$NODE"
           codesign --verify --strict --verbose=2 "$NODE"
-          codesign -d --entitlements - "$NODE" 2>/dev/null > "$ENTITLEMENTS"
+          codesign -d --entitlements :- "$NODE" 2>/dev/null > "$ENTITLEMENTS"
 
           for key in \
             com.apple.security.cs.allow-jit \
