@@ -96,8 +96,9 @@ GitHub Actions 会在官方托管的原生运行器上构建以下目标：
 - `APPLE_PASSWORD`
 - `APPLE_TEAM_ID`
 
-发布工作流会将这些参数传递给 Tauri。未配置这些 Secrets 时，工作流仍会生成
-未签名的测试安装包。
+配置完成后，再将仓库变量 `ENABLE_APPLE_SIGNING` 设置为 `true`。只有显式开启该
+变量时，发布工作流才会把签名凭据传递给 Tauri；否则即使仓库中残留了不完整的
+Apple Secrets，也会生成未签名安装包，不会阻断 DMG 构建。
 
 Windows 可使用 Authenticode 证书或 Microsoft Trusted Signing。请按照
 [Tauri Windows 签名指南](https://v2.tauri.app/distribute/sign/windows/)

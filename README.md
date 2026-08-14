@@ -100,8 +100,10 @@ For macOS signing and notarization, configure these repository secrets:
 - `APPLE_PASSWORD`
 - `APPLE_TEAM_ID`
 
-The release workflow forwards them to Tauri. When the secrets are absent, the
-workflow still creates unsigned test installers.
+Then set the repository variable `ENABLE_APPLE_SIGNING` to `true`. The release
+workflow only forwards signing credentials to Tauri when this explicit switch
+is enabled. Otherwise it creates unsigned installers, even if stale or partial
+Apple secrets exist in the repository.
 
 For Windows, obtain an Authenticode certificate or use Microsoft Trusted
 Signing, then add the signing command according to the
