@@ -1,0 +1,15 @@
+node_modules/
+.pnpm-store/
+dist/
+.cache/
+src-tauri/target/
+src-tauri/runtime/
+src-tauri/gen/
+*.log
+.DS_Store
+
+# Signing material must never be committed.
+*.p12
+*.pfx
+*.cer
+*.key

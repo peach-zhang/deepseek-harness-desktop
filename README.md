@@ -1,0 +1,124 @@
+# DSH Desktop
+
+An unofficial, self-contained Tauri 2 desktop distribution of
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
+
+Users download and open a normal Windows or macOS installer. Node.js,
+DeepSeek Harness, and its Web UI are already bundled: there is no need to
+install Node.js or run `npx @deepseek-ai/dsh web`.
+
+> This project is not affiliated with or endorsed by DeepSeek. DeepSeek and
+> DeepSeek Harness are trademarks or projects of their respective owners.
+
+## Download
+
+Open the repository's **Releases** page and choose:
+
+- Windows x64: `.exe` (recommended) or `.msi`
+- Apple Silicon Mac: `aarch64.dmg`
+- Intel Mac: `x64.dmg`
+
+DSH Desktop starts a private Harness server on a random `127.0.0.1` port, waits for
+its official readiness signal, and opens the built-in Web UI. Closing the app
+also stops the Harness process.
+
+## What gets bundled
+
+Versions are deliberately pinned for reproducible releases:
+
+| Component | Version |
+| --- | --- |
+| DeepSeek Harness | `0.1.0-rc.6` |
+| Node.js | `24.19.0` (Krypton LTS) |
+| Tauri JavaScript API | `2.11.1` |
+| Tauri CLI | `2.11.4` |
+
+The runtime preparation step downloads Node.js directly from `nodejs.org`,
+verifies its official SHA-256 checksum, and deploys the locked Harness npm
+dependency tree for the build machine's native target. Harness is stored as a
+compressed, symlink-preserving archive in the installer and expanded once into
+the per-user app-data directory on first launch.
+
+## Local development
+
+Requirements for contributors only:
+
+- Node.js 24
+- pnpm 10
+- Rust stable and the normal Tauri platform prerequisites
+
+```bash
+pnpm install
+pnpm runtime:prepare
+pnpm dev
+```
+
+Create a local installer with:
+
+```bash
+pnpm build:desktop
+```
+
+Generated runtime files live in `src-tauri/runtime/` and are intentionally not
+committed.
+
+## Publishing a GitHub Release
+
+1. Push this repository to GitHub with the default branch named `main`.
+2. Update the version in `package.json`, `src-tauri/Cargo.toml`, and
+   `src-tauri/tauri.conf.json`.
+3. Commit and push a matching tag, for example:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow builds these targets on native GitHub-hosted runners:
+
+- `x86_64-pc-windows-msvc`
+- `aarch64-apple-darwin`
+- `x86_64-apple-darwin`
+
+It creates a draft GitHub Release. Inspect the installers and publish the draft
+when verification is complete.
+
+## Signing
+
+Unsigned builds work, but Windows SmartScreen and macOS Gatekeeper can warn
+users. A public production release should be code-signed.
+
+For macOS signing and notarization, configure these repository secrets:
+
+- `APPLE_CERTIFICATE`
+- `APPLE_CERTIFICATE_PASSWORD`
+- `APPLE_SIGNING_IDENTITY`
+- `APPLE_ID`
+- `APPLE_PASSWORD`
+- `APPLE_TEAM_ID`
+
+The release workflow forwards them to Tauri. When the secrets are absent, the
+workflow still creates unsigned test installers.
+
+For Windows, obtain an Authenticode certificate or use Microsoft Trusted
+Signing, then add the signing command according to the
+[Tauri Windows signing guide](https://v2.tauri.app/distribute/sign/windows/).
+Never commit certificates or passwords.
+
+## Updating DeepSeek Harness
+
+Harness is currently a developer preview and may make breaking changes. To
+upgrade safely:
+
+1. Change the exact version in `runtime/package.json`.
+2. Update `HARNESS_VERSION` in `src-tauri/src/lib.rs`, `src/main.ts`, and
+   `scripts/prepare-runtime.mjs`.
+3. Regenerate `runtime/package-lock.json` with `npm install --package-lock-only`
+   from the `runtime` directory.
+4. Run the desktop smoke test on Windows, Apple Silicon, and Intel macOS.
+5. Publish a new wrapper version instead of changing an existing release.
+
+## License
+
+The wrapper is MIT licensed. DeepSeek Harness, Node.js, Tauri, and bundled
+dependencies retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

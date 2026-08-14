@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify desktop source
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.19.0
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install source dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Prepare pinned self-contained runtime
+        run: pnpm runtime:prepare -- --target aarch64-apple-darwin
+      - name: Check and test
+        run: |
+          pnpm test
+          pnpm build:web
+          cargo test --manifest-path src-tauri/Cargo.toml
+          cargo check --manifest-path src-tauri/Cargo.toml

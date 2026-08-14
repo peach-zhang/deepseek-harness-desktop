@@ -1,0 +1,155 @@
+:root {
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #eef5ff;
+  background: #080b10;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app { width: 100%; height: 100%; margin: 0; }
+
+button, input { font: inherit; }
+
+.shell {
+  position: relative;
+  display: grid;
+  min-height: 100%;
+  place-items: center;
+  overflow: hidden;
+  padding: 32px;
+  background:
+    linear-gradient(rgba(255,255,255,.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.022) 1px, transparent 1px),
+    #080b10;
+  background-size: 44px 44px;
+}
+
+.glow {
+  position: absolute;
+  width: 540px;
+  height: 540px;
+  border-radius: 50%;
+  filter: blur(100px);
+  opacity: .2;
+  pointer-events: none;
+}
+
+.glow--top { top: -300px; right: -120px; background: #38bdf8; }
+.glow--bottom { bottom: -350px; left: -160px; background: #3265ff; }
+
+.card {
+  z-index: 1;
+  width: min(560px, 100%);
+  padding: 30px;
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 22px;
+  background: rgba(14, 19, 28, .86);
+  box-shadow: 0 28px 80px rgba(0,0,0,.42), inset 0 1px rgba(255,255,255,.04);
+  backdrop-filter: blur(24px);
+}
+
+.brand, .status-block { display: flex; align-items: center; }
+.brand { gap: 14px; }
+
+.mark {
+  display: flex;
+  align-items: end;
+  gap: 4px;
+  width: 42px;
+  height: 42px;
+  padding: 9px;
+  border-radius: 13px;
+  background: linear-gradient(145deg, #3a7cff, #08b9e8);
+  box-shadow: 0 8px 24px rgba(30, 124, 255, .3);
+}
+
+.mark span { width: 6px; border-radius: 4px; background: white; }
+.mark span:nth-child(1) { height: 12px; opacity: .7; }
+.mark span:nth-child(2) { height: 22px; }
+.mark span:nth-child(3) { height: 16px; opacity: .84; }
+
+.eyebrow {
+  margin: 0 0 3px;
+  color: #66c9fa;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .19em;
+}
+
+h1 { margin: 0; font-size: 22px; letter-spacing: -.025em; }
+
+.status-block {
+  gap: 17px;
+  margin: 36px 0 34px;
+  padding: 22px;
+  border-radius: 15px;
+  background: rgba(255,255,255,.035);
+}
+
+.status-block h2 { margin: 0 0 7px; font-size: 15px; }
+.status-block p { margin: 0; color: #94a3b8; font-size: 13px; line-height: 1.55; }
+
+.spinner {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 2px solid rgba(255,255,255,.12);
+  border-top-color: #4dc8ff;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+
+.spinner--failed {
+  position: relative;
+  border: 0;
+  background: rgba(255, 96, 96, .12);
+  animation: none;
+}
+
+.spinner--failed::before, .spinner--failed::after {
+  position: absolute;
+  top: 13px;
+  left: 6px;
+  width: 16px;
+  height: 2px;
+  border-radius: 1px;
+  background: #ff7474;
+  content: "";
+  transform: rotate(45deg);
+}
+
+.spinner--failed::after { transform: rotate(-45deg); }
+
+button {
+  width: 100%;
+  padding: 11px 16px;
+  border: 0;
+  border-radius: 11px;
+  color: white;
+  background: linear-gradient(135deg, #2867ec, #1998db);
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(37, 110, 240, .24);
+}
+
+button:hover { filter: brightness(1.08); }
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255,255,255,.07);
+  color: #64748b;
+  font-size: 10px;
+  letter-spacing: .04em;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 540px) {
+  .shell { padding: 16px; }
+  .card { padding: 22px; }
+  footer { flex-direction: column; gap: 6px; }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "deepseek-harness-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.14.0",
+  "scripts": {
+    "dev": "tauri dev",
+    "build:web": "tsc --noEmit && vite build",
+    "runtime:prepare": "node scripts/prepare-runtime.mjs",
+    "build:desktop": "pnpm runtime:prepare && tauri build",
+    "check": "tsc --noEmit && cargo check --manifest-path src-tauri/Cargo.toml",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4",
+    "@types/node": "24.10.1",
+    "extract-zip": "2.0.1",
+    "tar": "7.5.20",
+    "typescript": "5.9.3",
+    "vite": "7.2.2",
+    "vitest": "4.0.9"
+  }
+}
