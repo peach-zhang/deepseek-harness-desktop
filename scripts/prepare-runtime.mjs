@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -60,6 +60,46 @@ async function verifyArchive(archive, filename, checksumsPath) {
   if (actual !== expected) throw new Error(`Checksum mismatch for ${filename}`)
 }
 
+async function* filesWithin(directory) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name)
+    if (entry.isDirectory()) {
+      yield* filesWithin(path)
+    } else if (entry.isFile()) {
+      yield path
+    }
+  }
+}
+
+async function signEmbeddedMacBinaries(directory, target) {
+  if (!target.includes('apple-darwin')) return
+
+  const identity = process.env.APPLE_SIGNING_IDENTITY?.trim()
+  if (!identity) return
+
+  let signed = 0
+  for await (const path of filesWithin(directory)) {
+    const type = spawnSync('file', ['-b', path], { encoding: 'utf8' })
+    if (type.error) throw new Error(`Unable to inspect ${path}: ${type.error.message}`)
+    if (type.status !== 0) throw new Error(`file failed for ${path} with status ${type.status}`)
+    if (!type.stdout.includes('Mach-O')) continue
+
+    console.log(`Signing embedded native binary: ${path}`)
+    const sign = spawnSync('codesign', [
+      '--force',
+      '--options', 'runtime',
+      '--timestamp',
+      '--sign', identity,
+      path,
+    ], { stdio: 'inherit' })
+    if (sign.error) throw new Error(`Unable to codesign ${path}: ${sign.error.message}`)
+    if (sign.status !== 0) throw new Error(`codesign failed for ${path} with status ${sign.status}`)
+    signed += 1
+  }
+
+  console.log(`Signed ${signed} embedded macOS native binaries with secure timestamps.`)
+}
+
 async function main() {
   if (basename(runtimeDir) !== 'runtime' || basename(dirname(runtimeDir)) !== 'src-tauri') {
     throw new Error(`Refusing to prepare unexpected runtime directory: ${runtimeDir}`)
@@ -118,6 +158,7 @@ async function main() {
     await copyFile(join(extracted, 'LICENSE'), join(dshDir, 'NODE_LICENSE'))
     const entry = join(dshDir, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
     await readFile(entry)
+    await signEmbeddedMacBinaries(dshDir, target)
     const manifest = `${JSON.stringify({
       node: NODE_VERSION,
       harness: HARNESS_VERSION,

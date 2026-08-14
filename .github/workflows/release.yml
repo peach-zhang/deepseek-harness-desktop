@@ -42,7 +42,15 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Install source dependencies
         run: pnpm install --frozen-lockfile
+      - name: Import Apple certificate for embedded runtime signing
+        if: ${{ runner.os == 'macOS' && vars.ENABLE_APPLE_SIGNING == 'true' }}
+        uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
+          p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
       - name: Prepare pinned self-contained runtime
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && vars.ENABLE_APPLE_SIGNING == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
         run: pnpm runtime:prepare -- --target ${{ matrix.target }}
       - name: Build unsigned installers and attach to GitHub Release
         if: ${{ vars.ENABLE_APPLE_SIGNING != 'true' }}
