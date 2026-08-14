@@ -14,22 +14,21 @@ install Node.js or run `npx @deepseek-ai/dsh web`.
 
 ## Download
 
-**Current release: [DSH Desktop v0.1.0](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/tag/v0.1.0)**
+**Current release: [DSH Desktop v0.1.1](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/tag/v0.1.1)**
 
 | Platform | Recommended download |
 | --- | --- |
-| Windows x64 | [EXE installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.0/DSH.Desktop_0.1.0_x64-setup.exe) |
-| Windows x64 (managed deployment) | [MSI installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.0/DSH.Desktop_0.1.0_x64_zh-CN.msi) |
-| Apple Silicon Mac | [DMG installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.0/DSH.Desktop_0.1.0_aarch64.dmg) |
-| Intel Mac | [DMG installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.0/DSH.Desktop_0.1.0_x64.dmg) |
+| Windows x64 | [EXE installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.1/DSH.Desktop_0.1.1_x64-setup.exe) |
+| Windows x64 (managed deployment) | [MSI installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.1/DSH.Desktop_0.1.1_x64_zh-CN.msi) |
+| Apple Silicon Mac | [DMG installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.1/DSH.Desktop_0.1.1_aarch64.dmg) |
+| Intel Mac | [DMG installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.1/DSH.Desktop_0.1.1_x64.dmg) |
 
 You can always find the newest version on the
 [Latest Release](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/latest)
 page.
 
-> The current macOS installers are unsigned. On first launch, Control-click
-> **DSH Desktop** in Finder and choose **Open**, or allow it in
-> **System Settings → Privacy & Security**.
+> Starting with v0.1.1, macOS installers are signed with Apple Developer ID and
+> submitted to Apple for notarization.
 
 DSH Desktop starts a private Harness server on a random `127.0.0.1` port, waits for
 its official readiness signal, and opens the built-in Web UI. Closing the app
@@ -83,8 +82,8 @@ committed.
 3. Commit and push a matching tag, for example:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 The release workflow builds these targets on native GitHub-hosted runners:
