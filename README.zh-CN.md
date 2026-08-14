@@ -14,11 +14,22 @@ Harness 及其 Web UI 均已内置，无需安装 Node.js，也不需要手动�
 
 ## 下载
 
-打开本仓库的 **Releases** 页面，根据系统选择安装包：
+**当前版本：[DSH Desktop v0.1.0](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/tag/v0.1.0)**
 
-- Windows x64：推荐下载 `.exe`，也可以使用 `.msi`
-- Apple 芯片 Mac：下载文件名包含 `aarch64` 的 `.dmg`
-- Intel 芯片 Mac：下载文件名包含 `x64` 的 `.dmg`
+| 平台 | 推荐下载 |
+| --- | --- |
+| Windows x64 | [EXE 安装包](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.0/DSH.Desktop_0.1.0_x64-setup.exe) |
+| Windows x64（企业或集中部署） | [MSI 安装包](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.0/DSH.Desktop_0.1.0_x64_zh-CN.msi) |
+| Apple 芯片 Mac | [DMG 安装包](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.0/DSH.Desktop_0.1.0_aarch64.dmg) |
+| Intel 芯片 Mac | [DMG 安装包](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.0/DSH.Desktop_0.1.0_x64.dmg) |
+
+以后发布的新版本可以统一从
+[最新版下载页面](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/latest)
+获取。
+
+> 当前 macOS 安装包尚未签名。首次启动时，请在 Finder 中右键点击
+> **DSH Desktop** 并选择“打开”，或者前往
+> **系统设置 → 隐私与安全性** 手动允许。
 
 DSH Desktop 启动后会在随机的 `127.0.0.1` 本地端口运行 Harness 服务，
 等待服务正式就绪后打开内置 Web UI。关闭桌面应用时，Harness 进程也会一并停止。
