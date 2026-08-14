@@ -128,6 +128,7 @@ jobs:
           codesign --verify --strict --verbose=2 "$NODE"
           codesign --verify --deep --strict --verbose=2 "$APP"
           codesign -d --entitlements :- "$APP" 2>/dev/null > "$ENTITLEMENTS"
+          ENTITLEMENT_SUMMARY="$(plutil -p "$ENTITLEMENTS")"
 
           for key in \
             com.apple.security.cs.allow-jit \
@@ -135,7 +136,7 @@ jobs:
             com.apple.security.cs.disable-executable-page-protection \
             com.apple.security.cs.disable-library-validation
           do
-            test "$(plutil -extract "$key" raw -o - "$ENTITLEMENTS")" = "true"
+            printf '%s\n' "$ENTITLEMENT_SUMMARY" | grep -F "\"$key\" => true" >/dev/null
           done
 
           "$NODE" -e "const v8 = require('node:v8'); console.log(process.version, v8.getHeapStatistics().heap_size_limit)"
