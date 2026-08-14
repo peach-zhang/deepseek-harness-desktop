@@ -122,11 +122,12 @@ jobs:
 
           APP="$MOUNT_POINT/DSH Desktop.app"
           NODE="$APP/Contents/MacOS/node"
-          ENTITLEMENTS="$RUNNER_TEMP/dsh-node-entitlements.plist"
+          ENTITLEMENTS="$RUNNER_TEMP/dsh-app-entitlements.plist"
 
           test -x "$NODE"
           codesign --verify --strict --verbose=2 "$NODE"
-          codesign -d --entitlements :- "$NODE" 2>/dev/null > "$ENTITLEMENTS"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -d --entitlements :- "$APP" 2>/dev/null > "$ENTITLEMENTS"
 
           for key in \
             com.apple.security.cs.allow-jit \
