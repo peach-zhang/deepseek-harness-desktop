@@ -44,16 +44,37 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Prepare pinned self-contained runtime
         run: pnpm runtime:prepare -- --target ${{ matrix.target }}
-      - name: Build and attach installers to GitHub Release
+      - name: Build unsigned installers and attach to GitHub Release
+        if: ${{ vars.ENABLE_APPLE_SIGNING != 'true' }}
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_CERTIFICATE: ${{ vars.ENABLE_APPLE_SIGNING == 'true' && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ vars.ENABLE_APPLE_SIGNING == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ vars.ENABLE_APPLE_SIGNING == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_ID: ${{ vars.ENABLE_APPLE_SIGNING == 'true' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ vars.ENABLE_APPLE_SIGNING == 'true' && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ vars.ENABLE_APPLE_SIGNING == 'true' && secrets.APPLE_TEAM_ID || '' }}
+        with:
+          tagName: v__VERSION__
+          releaseName: "DSH Desktop v__VERSION__"
+          releaseBody: |
+            Self-contained DSH Desktop installers.
+
+            - Windows x64: choose the `.exe` installer (or `.msi` for managed deployment).
+            - Apple Silicon Macs: choose the `aarch64` `.dmg`.
+            - Intel Macs: choose the `x64` `.dmg`.
+
+            Node.js and DeepSeek Harness are included. End users do not need npm, Node.js, or npx.
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: Build signed installers and attach to GitHub Release
+        if: ${{ vars.ENABLE_APPLE_SIGNING == 'true' }}
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: v__VERSION__
           releaseName: "DSH Desktop v__VERSION__"
