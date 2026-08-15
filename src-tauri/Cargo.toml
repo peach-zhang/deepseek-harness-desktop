@@ -31,7 +31,6 @@ tauri-plugin-log = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-single-instance = "2"
 ureq = "3"
-url = "2"
 
 [profile.release]
 codegen-units = 1

@@ -87,7 +87,7 @@ input {
   align-items: center;
   justify-content: space-between;
   height: 36px;
-  padding: 0 4px 0 14px;
+  padding: 0 0 0 14px;
   background: var(--dsw-bg-base);
   border-bottom: 1px solid var(--dsw-border-l1);
   -webkit-user-select: none;
@@ -212,6 +212,12 @@ h1 {
   letter-spacing: -0.01em;
   line-height: 28px;
   color: var(--dsw-label-primary);
+}
+
+.wordmark svg {
+  display: block;
+  width: 182px;
+  height: 24px;
 }
 
 /* ── Status block ── */

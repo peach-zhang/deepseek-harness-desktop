@@ -716,7 +716,6 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-single-instance",
  "ureq",
- "url",
 ]
 
 [[package]]

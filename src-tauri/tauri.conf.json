@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "DSH Desktop",
+  "productName": "DSH",
   "version": "0.1.3",
   "identifier": "io.github.dshdesktop.client",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "DSH Desktop",
+        "title": "deepseek harness",
         "width": 1280,
         "height": 820,
         "minWidth": 800,
