@@ -4,5 +4,13 @@
   "description": "Only the bundled bootstrap page can use Tauri core APIs. The Harness HTTP origin receives no IPC permissions.",
   "windows": ["main"],
   "local": true,
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-close",
+    "core:window:allow-is-maximized",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-start-dragging"
+  ]
 }

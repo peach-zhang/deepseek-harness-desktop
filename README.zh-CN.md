@@ -47,6 +47,23 @@ DSH Desktop 启动后会在随机的 `127.0.0.1` 本地端口运行 Harness 服�
 校验和验证文件，并按照构建机器的原生目标平台部署由锁文件固定的 Harness npm
 依赖树。Harness 会以压缩归档形式写入安装包，首次启动时解压到当前用户的应用数据目录。
 
+## 运行时自动更新
+
+每次启动时，DSH Desktop 都会查询 npm registry 上 `@deepseek-ai/dsh` 的
+`latest` 版本。如果发现比当前（内置或此前已下载）更新的版本，会先把新版本安装到
+应用数据目录，再启动 Harness 服务；检查与下载进度会显示在启动界面上。
+
+更新失败（例如断网）不会阻止启动——应用会回退到安装包内置的运行时。安装过程使用
+`--ignore-scripts`，与内置运行时的构建方式一致，不会执行任何第三方安装脚本。
+
+默认使用国内镜像 `https://registry.npmmirror.com`（内容与官方源逐字节一致，
+仅同步略有延迟）。可用的环境变量：
+
+| 变量 | 作用 |
+| --- | --- |
+| `DSH_DESKTOP_UPDATE_DISABLED=1` | 完全跳过启动时的更新检查 |
+| `DSH_DESKTOP_REGISTRY=<url>` | 改用其他 registry，例如官方源 `https://registry.npmjs.org` |
+
 ## 本地开发
 
 以下环境仅供项目贡献者开发使用，最终用户不需要安装：

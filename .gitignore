@@ -13,3 +13,6 @@ src-tauri/gen/
 *.pfx
 *.cer
 *.key
+
+# JetBrains IDE
+.idea/

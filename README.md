@@ -51,6 +51,28 @@ dependency tree for the build machine's native target. Harness is stored as a
 compressed, symlink-preserving archive in the installer and expanded once into
 the per-user app-data directory on first launch.
 
+## Runtime auto-update
+
+On every launch DSH Desktop asks the npm registry for the `latest` version of
+`@deepseek-ai/dsh`. When a version newer than the current one (bundled or
+previously downloaded) exists, it installs that release into the app-data
+directory before starting the Harness server; check and download progress is
+shown on the launch screen.
+
+A failed update (for example, when offline) never blocks startup — the app
+falls back to the runtime bundled in the installer. Installs run with
+`--ignore-scripts`, matching how the bundled runtime is built, so no
+third-party lifecycle scripts are executed.
+
+The default registry is the `https://registry.npmmirror.com` mirror, which
+serves byte-identical packages (only syncs slightly behind the official
+registry). Environment overrides:
+
+| Variable | Effect |
+| --- | --- |
+| `DSH_DESKTOP_UPDATE_DISABLED=1` | Skip the startup update check entirely |
+| `DSH_DESKTOP_REGISTRY=<url>` | Use another registry, for example the official `https://registry.npmjs.org` |
+
 ## Local development
 
 Requirements for contributors only:
