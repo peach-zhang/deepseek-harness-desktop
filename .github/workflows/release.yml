@@ -40,6 +40,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
       - name: Install source dependencies
         run: pnpm install --frozen-lockfile
       - name: Import Apple certificate for embedded runtime signing
@@ -52,6 +55,11 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && vars.ENABLE_APPLE_SIGNING == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
         run: pnpm runtime:prepare -- --target ${{ matrix.target }}
+      - name: Check and test before building installers
+        run: |
+          pnpm test
+          pnpm build:web
+          cargo test --manifest-path src-tauri/Cargo.toml
       - name: Build unsigned installers and attach to GitHub Release
         if: ${{ vars.ENABLE_APPLE_SIGNING != 'true' }}
         uses: tauri-apps/tauri-action@v0
