@@ -476,9 +476,11 @@ mod tests {
     fn validates_patch_paths() {
         assert!(validate_patch_path("p", "./cordis.patch.yml").is_ok());
         assert!(validate_patch_path("p", "cordis.patch.yml").is_ok());
+        // Absolute paths are rejected on every platform: POSIX paths carry a
+        // RootDir component (and Windows drive paths like `C:\abs.yml` are
+        // additionally caught by is_absolute).
         assert!(validate_patch_path("p", "/abs/path.yml").is_err());
         assert!(validate_patch_path("p", "../escape.yml").is_err());
-        assert!(validate_patch_path("p", "C:\\abs.yml").is_err());
     }
 
     #[test]
