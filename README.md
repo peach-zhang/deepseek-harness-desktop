@@ -14,14 +14,14 @@ install Node.js or run `npx @deepseek-ai/dsh web`.
 
 ## Download
 
-**Current release: [DSH Desktop v0.1.3](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/tag/v0.1.3)**
+**Current release: [DSH Desktop v0.1.4](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/tag/v0.1.4)**
 
 | Platform | Recommended download |
 | --- | --- |
-| Windows x64 | [EXE installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.3/DSH.Desktop_0.1.3_x64-setup.exe) |
-| Windows x64 (managed deployment) | [MSI installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.3/DSH.Desktop_0.1.3_x64_zh-CN.msi) |
-| Apple Silicon Mac | [DMG installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.3/DSH.Desktop_0.1.3_aarch64.dmg) |
-| Intel Mac | [DMG installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.3/DSH.Desktop_0.1.3_x64.dmg) |
+| Windows x64 | [EXE installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.4/DSH.Desktop_0.1.4_x64-setup.exe) |
+| Windows x64 (managed deployment) | [MSI installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.4/DSH.Desktop_0.1.4_x64_zh-CN.msi) |
+| Apple Silicon Mac | [DMG installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.4/DSH.Desktop_0.1.4_aarch64.dmg) |
+| Intel Mac | [DMG installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.4/DSH.Desktop_0.1.4_x64.dmg) |
 
 You can always find the newest version on the
 [Latest Release](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/latest)
@@ -73,6 +73,23 @@ registry). Environment overrides:
 | `DSH_DESKTOP_UPDATE_DISABLED=1` | Skip the startup update check entirely |
 | `DSH_DESKTOP_REGISTRY=<url>` | Use another registry, for example the official `https://registry.npmjs.org` |
 
+## Bundled Harness plugins
+
+Every npm package under the [`src-tauri/plugins/`](src-tauri/plugins/)
+directory is a Cordis plugin that ships inside the installer and is
+**enabled by default**: on launch the app copies each package into the
+Harness `web` profile (`<app-data>/harness/profiles/web`), records it as a
+dependency, and appends it to the profile's `dsh.profile.bundles` layer list
+when the package declares `dsh.bundle.patch` — the same thing
+`dsh plugin --profile web add` does. The install is idempotent and re-runs
+only when a bundled plugin's version changes or an installed copy goes
+missing; failures are logged and never block startup.
+
+See
+[`src-tauri/plugins/README.md`](src-tauri/plugins/README.md) for the package
+format and authoring rules. During development, point the app at a plugin
+directory with `DSH_DESKTOP_PLUGINS_DIR=<path>`.
+
 ## Local development
 
 Requirements for contributors only:
@@ -104,8 +121,8 @@ committed.
 3. Commit and push a matching tag, for example:
 
 ```bash
-git tag v0.1.3
-git push origin v0.1.3
+git tag v0.1.4
+git push origin v0.1.4
 ```
 
 The release workflow builds these targets on native GitHub-hosted runners:

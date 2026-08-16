@@ -1,0 +1,11 @@
+# deepseek-usage — bundle patch layer.
+#
+# This file turns the package into a DSH *profile bundle* (see
+# `package.json` → `dsh.bundle.patch`): the desktop app appends the package to
+# the `web` profile's `dsh.profile.bundles` list on first launch, and this
+# layer inserts the plugin row into the composed tree — the host half mounts
+# the `/deepseek-usage` route, and the client-modules node half scans the entry
+# and serves the sidebar balance button bundle.
+- insert:
+    - id: deepseek-usage
+      name: '@deepseek-ai/dsh-plugin-deepseek-usage'

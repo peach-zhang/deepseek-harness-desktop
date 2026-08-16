@@ -41,46 +41,7 @@ pub(crate) fn ensure_harness_runtime(resource_dir: &Path, data_dir: &Path) -> Re
     }
     fs::create_dir_all(&staging).map_err(|error| format!("无法创建运行时暂存目录：{error}"))?;
 
-    let unpack_result = (|| -> Result<(), String> {
-        let archive_file = File::open(&archive_path)
-            .map_err(|error| format!("无法读取 Harness 运行时：{error}"))?;
-        let decoder = GzDecoder::new(archive_file);
-        let mut archive = tar::Archive::new(decoder);
-        let entries = archive
-            .entries()
-            .map_err(|error| format!("无法读取 Harness 归档目录：{error}"))?;
-        for entry_result in entries {
-            let mut archive_entry =
-                entry_result.map_err(|error| format!("无法读取 Harness 归档条目：{error}"))?;
-            let entry_path = archive_entry
-                .path()
-                .map_err(|error| format!("Harness 归档包含无效路径：{error}"))?
-                .into_owned();
-            if !safe_archive_path(&entry_path) {
-                return Err(format!(
-                    "Harness 归档包含越界路径：{}",
-                    entry_path.display()
-                ));
-            }
-            let entry_type = archive_entry.header().entry_type();
-            if entry_type.is_symlink() || entry_type.is_hard_link() {
-                let link = archive_entry
-                    .link_name()
-                    .map_err(|error| format!("Harness 归档包含无效链接：{error}"))?
-                    .ok_or_else(|| "Harness 归档包含空链接。".to_owned())?;
-                if !archive_link_stays_inside(&entry_path, &link) {
-                    return Err(format!("Harness 归档链接越界：{}", entry_path.display()));
-                }
-            }
-            let unpacked = archive_entry
-                .unpack_in(&staging)
-                .map_err(|error| format!("无法解压 Harness 运行时：{error}"))?;
-            if !unpacked {
-                return Err(format!("Harness 归档条目越界：{}", entry_path.display()));
-            }
-        }
-        Ok(())
-    })();
+    let unpack_result = extract_guarded_archive(&archive_path, &staging);
 
     if let Err(error) = unpack_result {
         let _ = fs::remove_dir_all(&staging);
@@ -103,6 +64,47 @@ pub(crate) fn ensure_harness_runtime(resource_dir: &Path, data_dir: &Path) -> Re
     fs::rename(&staging, &destination)
         .map_err(|error| format!("无法启用 Harness 运行时：{error}"))?;
     Ok(entry)
+}
+
+/// Unpack a guarded gzip tarball into `staging`, validating every path and
+/// link against traversal so extraction can never escape the staging
+/// directory. Shared by the bundled Harness runtime and bundled plugins.
+pub(crate) fn extract_guarded_archive(archive_path: &Path, staging: &Path) -> Result<(), String> {
+    let archive_file =
+        File::open(archive_path).map_err(|error| format!("无法读取归档：{error}"))?;
+    let decoder = GzDecoder::new(archive_file);
+    let mut archive = tar::Archive::new(decoder);
+    let entries = archive
+        .entries()
+        .map_err(|error| format!("无法读取归档目录：{error}"))?;
+    for entry_result in entries {
+        let mut archive_entry =
+            entry_result.map_err(|error| format!("无法读取归档条目：{error}"))?;
+        let entry_path = archive_entry
+            .path()
+            .map_err(|error| format!("归档包含无效路径：{error}"))?
+            .into_owned();
+        if !safe_archive_path(&entry_path) {
+            return Err(format!("归档包含越界路径：{}", entry_path.display()));
+        }
+        let entry_type = archive_entry.header().entry_type();
+        if entry_type.is_symlink() || entry_type.is_hard_link() {
+            let link = archive_entry
+                .link_name()
+                .map_err(|error| format!("归档包含无效链接：{error}"))?
+                .ok_or_else(|| "归档包含空链接。".to_owned())?;
+            if !archive_link_stays_inside(&entry_path, &link) {
+                return Err(format!("归档链接越界：{}", entry_path.display()));
+            }
+        }
+        let unpacked = archive_entry
+            .unpack_in(staging)
+            .map_err(|error| format!("无法解压归档：{error}"))?;
+        if !unpacked {
+            return Err(format!("归档条目越界：{}", entry_path.display()));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn safe_archive_path(path: &Path) -> bool {

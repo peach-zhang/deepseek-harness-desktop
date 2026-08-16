@@ -14,14 +14,14 @@ Harness 及其 Web UI 均已内置，无需安装 Node.js，也不需要手动�
 
 ## 下载
 
-**当前版本：[DSH Desktop v0.1.3](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/tag/v0.1.3)**
+**当前版本：[DSH Desktop v0.1.4](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/tag/v0.1.4)**
 
 | 平台 | 推荐下载 |
 | --- | --- |
-| Windows x64 | [EXE 安装包](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.3/DSH.Desktop_0.1.3_x64-setup.exe) |
-| Windows x64（企业或集中部署） | [MSI 安装包](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.3/DSH.Desktop_0.1.3_x64_zh-CN.msi) |
-| Apple 芯片 Mac | [DMG 安装包](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.3/DSH.Desktop_0.1.3_aarch64.dmg) |
-| Intel 芯片 Mac | [DMG 安装包](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.3/DSH.Desktop_0.1.3_x64.dmg) |
+| Windows x64 | [EXE 安装包](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.4/DSH.Desktop_0.1.4_x64-setup.exe) |
+| Windows x64（企业或集中部署） | [MSI 安装包](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.4/DSH.Desktop_0.1.4_x64_zh-CN.msi) |
+| Apple 芯片 Mac | [DMG 安装包](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.4/DSH.Desktop_0.1.4_aarch64.dmg) |
+| Intel 芯片 Mac | [DMG 安装包](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.4/DSH.Desktop_0.1.4_x64.dmg) |
 
 以后发布的新版本可以统一从
 [最新版下载页面](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/latest)
@@ -64,6 +64,20 @@ DSH Desktop 启动后会在随机的 `127.0.0.1` 本地端口运行 Harness 服�
 | `DSH_DESKTOP_UPDATE_DISABLED=1` | 完全跳过启动时的更新检查 |
 | `DSH_DESKTOP_REGISTRY=<url>` | 改用其他 registry，例如官方源 `https://registry.npmjs.org` |
 
+## 内置 Harness 插件
+
+[`src-tauri/plugins/`](src-tauri/plugins/) 目录下的每个 npm 包都是一个 Cordis
+插件，会随安装包分发并**默认启用**：启动时应用把每个插件包复制到 Harness 的
+`web` profile（`<应用数据目录>/harness/profiles/web`），登记为依赖；当包的
+`package.json` 声明 `dsh.bundle.patch` 时，还会把插件追加到该 profile 的
+`dsh.profile.bundles` 层列表——与 `dsh plugin --profile web add` 的效果一致。
+安装是幂等的，仅当内置插件的版本发生变化或已安装副本缺失时才重新同步；
+安装失败只会记录日志，不会阻止启动。
+
+插件包格式与编写规则见
+[`src-tauri/plugins/README.md`](src-tauri/plugins/README.md)。开发时可用
+`DSH_DESKTOP_PLUGINS_DIR=<路径>` 让应用直接读取某个插件目录。
+
 ## 本地开发
 
 以下环境仅供项目贡献者开发使用，最终用户不需要安装：
@@ -95,8 +109,8 @@ pnpm build:desktop
 3. 创建并推送相同版本的标签，例如：
 
 ```bash
-git tag v0.1.3
-git push origin v0.1.3
+git tag v0.1.4
+git push origin v0.1.4
 ```
 
 GitHub Actions 会在官方托管的原生运行器上构建以下目标：

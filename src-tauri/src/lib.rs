@@ -1,5 +1,6 @@
 mod backend;
 mod db;
+mod plugins;
 mod runtime;
 mod theme;
 mod update;

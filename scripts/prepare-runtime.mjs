@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { chmod, copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
+import { gzipSync } from 'node:zlib'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import extractZip from 'extract-zip'
@@ -171,6 +173,34 @@ async function main() {
       gzip: true,
       portable: true,
     }, ['.'])
+
+    // Bundle the repo `src-tauri/plugins/` directory: each subdirectory
+    // carrying a package.json is a Cordis plugin installed into the Harness
+    // `web` profile on first launch (see src-tauri/src/plugins.rs). An empty
+    // plugin set still produces an (empty) archive so the resource is always
+    // present.
+    const pluginsDir = join(projectRoot, 'src-tauri', 'plugins')
+    await mkdir(pluginsDir, { recursive: true })
+    const bundledPlugins = []
+    for (const entry of await readdir(pluginsDir, { withFileTypes: true })) {
+      if (entry.isDirectory() && existsSync(join(pluginsDir, entry.name, 'package.json'))) {
+        bundledPlugins.push(entry.name)
+      }
+    }
+    if (bundledPlugins.length === 0) {
+      // tar refuses an empty file list; a tarball of two zero blocks is the
+      // canonical empty archive, so the resource always exists at build time.
+      await writeFile(join(runtimeDir, 'plugins.tar.gz'), gzipSync(Buffer.alloc(1024)))
+    } else {
+      await tar.c({
+        cwd: pluginsDir,
+        file: join(runtimeDir, 'plugins.tar.gz'),
+        gzip: true,
+        portable: true,
+      }, bundledPlugins)
+    }
+    console.log(`Bundled ${bundledPlugins.length} plugin(s): ${bundledPlugins.join(', ') || '(none)'}`)
+
     await rm(dshDir, { recursive: true, force: true })
     console.log(`Runtime ready: ${sidecar}`)
   } finally {
