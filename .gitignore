@@ -16,3 +16,6 @@ src-tauri/gen/
 
 # JetBrains IDE
 .idea/
+
+# Icon rendering leftovers
+.tmp_svg_render/

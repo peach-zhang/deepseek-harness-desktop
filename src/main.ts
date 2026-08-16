@@ -35,14 +35,39 @@ function applyHarnessTheme(preference: string): void {
   const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches
   const dark = preference === 'dark' || (preference === 'system' && systemDark)
   document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+  updateTitlebarIcons()
+}
+
+function isDarkTheme(): boolean {
+  return document.documentElement.dataset.theme === 'dark'
+}
+
+function titlebarIcons() {
+  const dark = isDarkTheme()
+  return {
+    minimize: dark ? 'assets/minimize-white.svg' : 'assets/minimize.svg',
+    maximize: dark ? 'assets/normal-mode-white.svg' : 'assets/normal-mode.svg',
+    restore: dark ? 'assets/streamlined-mode-white.svg' : 'assets/streamlined-mode.svg',
+    close: dark ? 'assets/shut-down-white.svg' : 'assets/shut-down.svg',
+  }
 }
 
 async function updateMaximizeIcon(): Promise<void> {
   const maximized = await win.isMaximized()
-  const iconMax = document.querySelector<SVGElement>('.icon-maximize')
-  const iconRestore = document.querySelector<SVGElement>('.icon-restore')
-  if (iconMax) iconMax.style.display = maximized ? 'none' : ''
-  if (iconRestore) iconRestore.style.display = maximized ? '' : 'none'
+  const icons = titlebarIcons()
+  const img = document.querySelector<HTMLImageElement>('.icon-maximize-img')
+  if (img) img.src = maximized ? icons.restore : icons.maximize
+}
+
+function updateTitlebarIcons(): void {
+  const icons = titlebarIcons()
+  document.querySelectorAll<HTMLImageElement>('.icon-minimize-img').forEach((img) => {
+    img.src = icons.minimize
+  })
+  document.querySelectorAll<HTMLImageElement>('.icon-close-img').forEach((img) => {
+    img.src = icons.close
+  })
+  void updateMaximizeIcon()
 }
 
 function escapeHtml(value: string): string {
@@ -61,14 +86,13 @@ function render(status: BackendStatus): void {
       <span class="titlebar__title" data-tauri-drag-region>DSH Desktop</span>
       <div class="titlebar__controls">
         <button class="titlebar__btn" id="win-minimize" aria-label="最小化">
-          <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
+          <img class="icon-minimize-img" src="${titlebarIcons().minimize}" width="12" height="12" alt="" />
         </button>
         <button class="titlebar__btn" id="win-maximize" aria-label="最大化">
-          <svg class="icon-maximize" width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg>
-          <svg class="icon-restore" width="10" height="10" viewBox="0 0 10 10" style="display:none"><rect x="2.5" y="0.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/><rect x="0.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+          <img class="icon-maximize-img" src="${titlebarIcons().maximize}" width="12" height="12" alt="" />
         </button>
         <button class="titlebar__btn titlebar__btn--close" id="win-close" aria-label="关闭">
-          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 0 L10 9 M10 0 L1 9" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+          <img class="icon-close-img" src="${titlebarIcons().close}" width="12" height="12" alt="" />
         </button>
       </div>
     </div>
@@ -125,14 +149,13 @@ function renderWithIframe(url: string): void {
       <span class="titlebar__title" data-tauri-drag-region>DSH Desktop</span>
       <div class="titlebar__controls">
         <button class="titlebar__btn" id="win-minimize" aria-label="最小化">
-          <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
+          <img class="icon-minimize-img" src="${titlebarIcons().minimize}" width="12" height="12" alt="" />
         </button>
         <button class="titlebar__btn" id="win-maximize" aria-label="最大化">
-          <svg class="icon-maximize" width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg>
-          <svg class="icon-restore" width="10" height="10" viewBox="0 0 10 10" style="display:none"><rect x="2.5" y="0.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/><rect x="0.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+          <img class="icon-maximize-img" src="${titlebarIcons().maximize}" width="12" height="12" alt="" />
         </button>
         <button class="titlebar__btn titlebar__btn--close" id="win-close" aria-label="关闭">
-          <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 0 L10 9 M10 0 L1 9" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+          <img class="icon-close-img" src="${titlebarIcons().close}" width="12" height="12" alt="" />
         </button>
       </div>
     </div>
