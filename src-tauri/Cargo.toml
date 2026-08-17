@@ -33,6 +33,14 @@ tauri-plugin-single-instance = "2"
 ureq = "3"
 url = "2.5.8"
 
+[profile.dev]
+# Dev builds of the windows/tauri crates produce multi-GB .lib/.pdb artifacts.
+# Keep line tables (usable backtraces) but strip symbols and drop full debug
+# info so `target` stays small and IDE indexing stays fast.
+debug = "line-tables-only"
+strip = true
+incremental = true
+
 [profile.release]
 codegen-units = 1
 lto = true
