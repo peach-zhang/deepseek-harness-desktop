@@ -328,6 +328,70 @@ footer {
   letter-spacing: 0.02em;
 }
 
+/* ── App update banner ── */
+.update-banner {
+  position: fixed;
+  top: 48px; /* 36px titlebar + 12px */
+  right: 16px;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 12px 14px 12px 16px;
+  border: 1px solid var(--dsw-border-l1);
+  border-radius: 14px;
+  background: var(--dsw-bg-layer-2);
+  box-shadow: var(--dsw-shadow-lv3);
+}
+
+.update-banner__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.update-banner__text strong {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  color: var(--dsw-label-primary);
+}
+
+.update-banner__text span {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-label-tertiary);
+  word-break: break-all;
+}
+
+.update-banner__actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.update-banner__btn {
+  width: auto;
+  padding: 6px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--dsw-label-secondary);
+  background: var(--dsw-bg-layer-3);
+}
+
+.update-banner__btn--primary {
+  color: var(--dsw-button-text);
+  background: var(--dsw-button-fill);
+}
+
+.update-banner__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* ── Failed state ── */
 .shell--failed .status-block {
   border-color: rgba(239, 68, 68, 0.15);

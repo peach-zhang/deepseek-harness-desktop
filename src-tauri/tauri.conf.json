@@ -31,6 +31,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "category": "DeveloperTool",
     "copyright": "Copyright © 2026 DSH Desktop contributors",
     "shortDescription": "Self-contained desktop distribution of DeepSeek Harness",
@@ -67,6 +68,17 @@
         "installerIcon": "icons/icon.ico",
         "installMode": "currentUser",
         "languages": ["SimpChinese", "English"]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZGNERGNjJBNTM3MzNDMUQKUldRZFBITlRLdlpOLzN2bHpHckVNT010Z3ZTSVkvOWdsZlNPVXBFVldxZjBOMzFSRDdFbTlBVWkK",
+      "endpoints": [
+        "https://github.com/peach-zhang/deepseek-harness-desktop/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { relaunch } from '@tauri-apps/plugin-process'
+import { check, type Update } from '@tauri-apps/plugin-updater'
 import './styles.css'
 
 export type BackendPhase = 'starting' | 'checking' | 'updating' | 'running' | 'failed' | 'stopped'
@@ -209,6 +211,141 @@ async function restart(): Promise<void> {
   }
 }
 
+// ── Desktop shell self-update ──
+// The bundled Harness runtime updates itself at startup (see update.rs); this
+// watches GitHub Releases for a newer *desktop app* via tauri-plugin-updater
+// and offers to install it. The banner is attached to document.body so the
+// render()/renderWithIframe() innerHTML rewrites never remove it.
+
+const APP_UPDATE_INTERVAL_MS = 4 * 60 * 60 * 1000
+const APP_UPDATE_DISMISS_KEY = 'dsh-desktop-dismissed-update'
+
+function dismissedUpdateVersion(): string | null {
+  try {
+    return localStorage.getItem(APP_UPDATE_DISMISS_KEY)
+  } catch {
+    return null
+  }
+}
+
+function dismissUpdateVersion(version: string): void {
+  try {
+    localStorage.setItem(APP_UPDATE_DISMISS_KEY, version)
+  } catch {
+    // Storage unavailable: the banner simply reappears on the next launch.
+  }
+}
+
+function bannerButton(label: string, primary: boolean): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = primary ? 'update-banner__btn update-banner__btn--primary' : 'update-banner__btn'
+  button.textContent = label
+  return button
+}
+
+function showUpdateBanner(update: Update): void {
+  document.querySelector('.update-banner')?.remove()
+
+  const banner = document.createElement('div')
+  banner.className = 'update-banner'
+  banner.setAttribute('role', 'status')
+
+  const text = document.createElement('div')
+  text.className = 'update-banner__text'
+  const title = document.createElement('strong')
+  title.textContent = `发现新版本 v${update.version}`
+  const detail = document.createElement('span')
+  detail.textContent = `当前版本 v${update.currentVersion}`
+  text.append(title, detail)
+
+  const actions = document.createElement('div')
+  actions.className = 'update-banner__actions'
+  const installButton = bannerButton('立即更新', true)
+  const laterButton = bannerButton('稍后', false)
+  actions.append(installButton, laterButton)
+
+  banner.append(text, actions)
+  document.body.append(banner)
+
+  laterButton.addEventListener('click', () => {
+    dismissUpdateVersion(update.version)
+    banner.remove()
+  })
+  installButton.addEventListener('click', () => {
+    void runAppUpdate(banner, title, detail, actions, update)
+  })
+}
+
+async function runAppUpdate(
+  banner: HTMLElement,
+  title: HTMLElement,
+  detail: HTMLElement,
+  actions: HTMLElement,
+  update: Update,
+): Promise<void> {
+  actions.querySelectorAll('button').forEach((button) => {
+    button.disabled = true
+  })
+  title.textContent = '正在下载更新…'
+  detail.textContent = ''
+
+  let downloaded = 0
+  let total = 0
+  try {
+    await update.downloadAndInstall((event) => {
+      if (event.event === 'Started') {
+        total = event.data.contentLength ?? 0
+      } else if (event.event === 'Progress') {
+        downloaded += event.data.chunkLength
+        detail.textContent =
+          total > 0
+            ? `已下载 ${Math.min(100, Math.round((downloaded / total) * 100))}%`
+            : `已下载 ${(downloaded / 1024 / 1024).toFixed(1)} MB`
+      } else {
+        title.textContent = '正在安装更新…'
+        detail.textContent = '安装完成后需要重启应用'
+      }
+    })
+  } catch (error) {
+    title.textContent = '更新失败'
+    detail.textContent = String(error)
+    actions.querySelectorAll('button').forEach((button) => {
+      button.disabled = false
+    })
+    return
+  }
+
+  title.textContent = `v${update.version} 已就绪`
+  detail.textContent = '重启应用以完成更新'
+  actions.innerHTML = ''
+  const restartButton = bannerButton('立即重启', true)
+  const laterButton = bannerButton('稍后重启', false)
+  actions.append(restartButton, laterButton)
+  laterButton.addEventListener('click', () => {
+    banner.remove()
+  })
+  restartButton.addEventListener('click', () => {
+    void relaunch()
+  })
+}
+
+async function checkForAppUpdate(): Promise<void> {
+  try {
+    const update = await check()
+    if (!update || update.version === dismissedUpdateVersion()) return
+    showUpdateBanner(update)
+  } catch (error) {
+    // Offline or unreachable release feed: stay silent, try again later.
+    console.warn('Desktop update check failed:', error)
+  }
+}
+
+function startAppUpdateChecks(): void {
+  window.setTimeout(() => void checkForAppUpdate(), 5000)
+  window.setInterval(() => void checkForAppUpdate(), APP_UPDATE_INTERVAL_MS)
+}
+
 async function bootstrap(): Promise<void> {
   render({
     phase: 'starting',
@@ -241,6 +378,8 @@ async function bootstrap(): Promise<void> {
   void win.onResized(async () => {
     await updateMaximizeIcon()
   })
+
+  startAppUpdateChecks()
 
   try {
     applyStatus(await invoke<BackendStatus>('backend_status'))
