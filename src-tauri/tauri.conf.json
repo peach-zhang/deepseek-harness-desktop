@@ -73,7 +73,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc3QkIwRURDOTE5M0QxRDMKUldUVDBaT1IzQTY3ZDNGSWFuQWNsR0ZpWTZsUFJqT0FneWlFbFV4alBxRDQ1OU4yQUFPVlhMeTgK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVCOTFGMzhDN0E3OEEyRDkKUldUWm9uaDZqUE9SVy85WkdxS21UTFZEMnIrTWlnM2xuRkt6STR3YXYzSENzbXNZdFZvcnVuTmYK",
       "endpoints": [
         "https://github.com/peach-zhang/deepseek-harness-desktop/releases/latest/download/latest.json"
       ],
