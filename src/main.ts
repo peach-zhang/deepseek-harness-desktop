@@ -293,7 +293,9 @@ async function runAppUpdate(
   let downloaded = 0
   let total = 0
   try {
-    await update.downloadAndInstall((event) => {
+    // Download the update first; the backend is still alive during this
+    // phase so progress can be shown normally.
+    await update.download((event) => {
       if (event.event === 'Started') {
         total = event.data.contentLength ?? 0
       } else if (event.event === 'Progress') {
@@ -302,11 +304,29 @@ async function runAppUpdate(
           total > 0
             ? `已下载 ${Math.min(100, Math.round((downloaded / total) * 100))}%`
             : `已下载 ${(downloaded / 1024 / 1024).toFixed(1)} MB`
-      } else {
-        title.textContent = '正在安装更新…'
-        detail.textContent = '安装完成后需要重启应用'
       }
     })
+  } catch (error) {
+    title.textContent = '更新失败'
+    detail.textContent = String(error)
+    actions.querySelectorAll('button').forEach((button) => {
+      button.disabled = false
+    })
+    return
+  }
+
+  // Stop the Node.js backend and kill orphaned node processes before the
+  // installer runs, so it can replace locked files (e.g. node.exe).
+  title.textContent = '正在安装更新…'
+  detail.textContent = '正在停止后台进程…'
+  try {
+    await invoke('prepare_for_update')
+  } catch (error) {
+    console.warn('prepare_for_update failed:', error)
+  }
+
+  try {
+    await update.install()
   } catch (error) {
     title.textContent = '更新失败'
     detail.textContent = String(error)

@@ -5,7 +5,13 @@ mod runtime;
 mod theme;
 mod update;
 
+use std::path::PathBuf;
+
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use tauri::{Manager, State};
+use tauri::webview::{DownloadEvent, WebviewWindowBuilder};
 
 pub(crate) const HARNESS_VERSION: &str = "0.1.0-rc.6";
 pub(crate) const MAX_DIAGNOSTIC_LINES: usize = 12;
@@ -70,11 +76,38 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             backend::commands::backend_status,
             backend::commands::restart_backend,
+            backend::commands::prepare_for_update,
             get_desktop_info,
             set_update_check_time,
             theme::get_harness_theme,
         ])
         .setup(move |app| {
+            // Manually create the main window with a download handler so files
+            // saved from the Harness iframe automatically reveal in Explorer /
+            // Finder.  The window is marked `"create": false` in tauri.conf.json
+            // to prevent Tauri from building it before this handler is attached.
+            let window_config = app.config().app.windows.first()
+                .ok_or_else(|| "主窗口配置缺失".to_owned())?;
+            let _webview_window = WebviewWindowBuilder::from_config(app.handle(), window_config)?
+                .on_download(|_webview, event| {
+                    match event {
+                        DownloadEvent::Requested { .. } => {
+                            // Allow the download to proceed with its default path.
+                            true
+                        }
+                        DownloadEvent::Finished { url: _, path, success } => {
+                            if let Some(file_path) = path {
+                                if success {
+                                    open_containing_folder(&file_path);
+                                }
+                            }
+                            true
+                        }
+                        _ => true,
+                    }
+                })
+                .build()?;
+
             // Initialize SQLite database
             let data_dir = app
                 .path()
@@ -158,4 +191,36 @@ pub fn run() {
             tauri::async_runtime::block_on(manager.stop());
         }
     });
+}
+
+/// Opens the containing folder (and selects the file) after a download
+/// finishes.  Platform-specific: uses Explorer on Windows, `open -R` on
+/// macOS, and `xdg-open` on Linux.
+fn open_containing_folder(path: &PathBuf) {
+    #[cfg(target_os = "windows")]
+    {
+        // Just open the parent directory.  The `explorer /select,<file>`
+        // approach is unreliable: when the path format isn't exactly right,
+        // Explorer ignores /select and falls back to "Documents".
+        if let Some(parent) = path.parent() {
+            let _ = std::process::Command::new("explorer.exe")
+                .arg(parent)
+                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+                .spawn();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // `open -R <path>` reveals the file in Finder.
+        let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Open the parent directory with the default file manager.
+        if let Some(parent) = path.parent() {
+            let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
+        }
+    }
 }
