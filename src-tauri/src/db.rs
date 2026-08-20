@@ -225,10 +225,10 @@ mod tests {
     fn records_harness_history() {
         let db = temp_db();
         db.record_harness_version("0.1.0-rc.5", "bundled").unwrap();
-        db.record_harness_version("0.1.0-rc.6", "update").unwrap();
+        db.record_harness_version("0.1.0-rc.8", "update").unwrap();
         let history = db.harness_history().unwrap();
         assert_eq!(history.len(), 2);
-        assert_eq!(history[0].version, "0.1.0-rc.6");
+        assert_eq!(history[0].version, "0.1.0-rc.8");
         assert!(history[0].is_current);
         assert!(!history[1].is_current);
     }
@@ -236,8 +236,8 @@ mod tests {
     #[test]
     fn re_recording_same_version_does_not_duplicate() {
         let db = temp_db();
-        db.record_harness_version("0.1.0-rc.6", "bundled").unwrap();
-        db.record_harness_version("0.1.0-rc.6", "bundled").unwrap();
+        db.record_harness_version("0.1.0-rc.8", "bundled").unwrap();
+        db.record_harness_version("0.1.0-rc.8", "bundled").unwrap();
         let history = db.harness_history().unwrap();
         assert_eq!(history.len(), 1);
         assert!(history[0].is_current);

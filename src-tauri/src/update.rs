@@ -521,19 +521,19 @@ mod tests {
     #[test]
     fn prefers_latest_dist_tag() {
         let metadata = json!({
-            "dist-tags": { "latest": "0.1.0-rc.6", "next": "0.1.0-rc.7" },
-            "versions": { "0.1.0-rc.6": {}, "0.1.0-rc.7": {} }
+            "dist-tags": { "latest": "0.1.0-rc.8", "next": "0.1.0-rc.7" },
+            "versions": { "0.1.0-rc.8": {}, "0.1.0-rc.7": {} }
         });
         assert_eq!(
             latest_candidate(&metadata),
-            Some(Version::parse("0.1.0-rc.6").unwrap())
+            Some(Version::parse("0.1.0-rc.8").unwrap())
         );
     }
 
     #[test]
     fn falls_back_to_highest_version_without_latest_tag() {
         let metadata = json!({
-            "versions": { "0.1.0-rc.6": {}, "0.1.0-rc.7": {}, "0.0.1-rc.5": {} }
+            "versions": { "0.1.0-rc.8": {}, "0.1.0-rc.7": {}, "0.0.1-rc.5": {} }
         });
         assert_eq!(
             latest_candidate(&metadata),
@@ -551,7 +551,7 @@ mod tests {
             Some(Version::parse("0.1.0").unwrap())
         );
         assert!(Version::parse("0.1.0").unwrap() > Version::parse("0.1.0-rc.7").unwrap());
-        assert!(Version::parse("0.1.0-rc.7").unwrap() > Version::parse("0.1.0-rc.6").unwrap());
+        assert!(Version::parse("0.1.0-rc.7").unwrap() > Version::parse("0.1.0-rc.8").unwrap());
     }
 
     #[test]
@@ -567,11 +567,11 @@ mod tests {
     fn parses_installed_dir_names() {
         let arch = std::env::consts::ARCH;
         assert_eq!(
-            installed_dir_version(&format!("0.1.0-rc.6-{arch}")),
-            Some(Version::parse("0.1.0-rc.6").unwrap())
+            installed_dir_version(&format!("0.1.0-rc.8-{arch}")),
+            Some(Version::parse("0.1.0-rc.8").unwrap())
         );
         assert_eq!(installed_dir_version(&format!("node-{arch}")), None);
-        assert_eq!(installed_dir_version("0.1.0-rc.6"), None);
+        assert_eq!(installed_dir_version("0.1.0-rc.8"), None);
     }
 
     #[test]

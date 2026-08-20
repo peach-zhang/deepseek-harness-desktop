@@ -40,7 +40,7 @@ Versions are deliberately pinned for reproducible releases:
 
 | Component | Version |
 | --- | --- |
-| DeepSeek Harness | `0.1.0-rc.6` |
+| DeepSeek Harness | `0.1.0-rc.8` |
 | Node.js | `24.19.0` (Krypton LTS) |
 | Tauri JavaScript API | `2.11.1` |
 | Tauri CLI | `2.11.4` |

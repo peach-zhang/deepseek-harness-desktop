@@ -183,7 +183,7 @@ mod tests {
         assert!(version.status.success());
         assert_eq!(
             String::from_utf8_lossy(&version.stdout).trim(),
-            "0.1.0-rc.6"
+            "0.1.0-rc.8"
         );
         fs::remove_dir_all(&data_dir).expect("temporary runtime should be removable");
     }
