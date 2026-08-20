@@ -99,7 +99,7 @@ fn bundled_source(resource_dir: &Path, data_dir: &Path) -> Result<BundledSource,
         }
         fs::create_dir_all(&staging)
             .map_err(|error| format!("无法创建插件暂存目录:{error}"))?;
-        crate::runtime::extract_guarded_archive(&archive_path, &staging)?;
+        crate::archive::extract_guarded_archive(&archive_path, &staging)?;
         return Ok(BundledSource::Staging(staging));
     }
     if let Ok(dir) = std::env::var(PLUGINS_DIR_ENV) {
