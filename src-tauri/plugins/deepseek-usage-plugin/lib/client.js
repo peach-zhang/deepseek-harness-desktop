@@ -36,12 +36,26 @@ window.__ModuleLoader__.load({
       return String(value);
     }
 
+    /**
+     * 返回当前「用量」所属人：9:00–12:00、14:00–18:00 为梁文锋，其余时间为梁文谷。
+     * 边界按 [开始, 结束) 处理，即 12:00 / 18:00 起切换为梁文谷。
+     */
+    function getActiveUser(now) {
+      var hour = new Date(now).getHours();
+      var wenfeng = (hour >= 9 && hour < 12) || (hour >= 14 && hour < 18);
+      return wenfeng ? "梁文锋" : "梁文谷";
+    }
+
     /** Sidebar footer button: shows the DeepSeek account balance directly. */
     function BalanceButton(props) {
       var wide = props.wide;
       var stateRef = React.useState({ phase: "loading", total: null, currency: null, available: false, error: null });
       var state = stateRef[0];
       var setState = stateRef[1];
+
+      var nowRef = React.useState(Date.now());
+      var now = nowRef[0];
+      var setNow = nowRef[1];
 
       var load = React.useCallback(function () {
         fetch("/deepseek-usage", { method: "GET", cache: "no-store" })
@@ -70,18 +84,21 @@ window.__ModuleLoader__.load({
       React.useEffect(function () {
         load();
         var timer = window.setInterval(load, 60000);
+        var nameTimer = window.setInterval(function () { setNow(Date.now()); }, 30000);
         return function () {
           window.clearInterval(timer);
+          window.clearInterval(nameTimer);
         };
       }, [load]);
 
       var phase = state.phase;
       var amount = state.total;
-      var titleText = "DeepSeek 余额";
-      if (phase === "error") titleText = "余额查询失败：" + state.error;
-      else if (phase === "ready" && amount !== null) titleText = "DeepSeek 余额：" + amount + (state.currency ? " " + state.currency : "") + (state.available ? "（可用）" : "（不可用）");
-      else if (phase === "ready") titleText = "DeepSeek 余额：暂无数据";
-      else titleText = "DeepSeek 余额：加载中…";
+      var userName = getActiveUser(now);
+      var titleText = "DeepSeek 余额（" + userName + "）";
+      if (phase === "error") titleText = "余额查询失败（" + userName + "）：" + state.error;
+      else if (phase === "ready" && amount !== null) titleText = "DeepSeek 余额（" + userName + "）：" + amount + (state.currency ? " " + state.currency : "") + (state.available ? "（可用）" : "（不可用）");
+      else if (phase === "ready") titleText = "DeepSeek 余额（" + userName + "）：暂无数据";
+      else titleText = "DeepSeek 余额（" + userName + "）：加载中…";
 
       var dotClass = phase === "error" || (phase === "ready" && !state.available) ? "dshu-dot-bad"
         : phase === "ready" && amount !== null ? "dshu-dot-ok"
@@ -101,7 +118,7 @@ window.__ModuleLoader__.load({
           { viewBox: "0 0 16 16", width: wide ? 14 : 18, height: wide ? 14 : 18, "aria-hidden": true },
           createElement("path", { d: "M2 13h12M3 9h4l2-4 2 2h4", stroke: "currentColor", strokeWidth: "1.5", fill: "none", strokeLinecap: "round", strokeLinejoin: "round" })
         ),
-        wide ? createElement("span", { className: "dshu-trigger-label" }, "用量") : null,
+        wide ? createElement("span", { className: "dshu-trigger-label" }, "用量 · " + userName) : null,
         !wide ? createElement("span", { className: "dshu-status-dot " + dotClass }) : null,
         wide && phase === "ready" && amount !== null
           ? createElement("span", { className: "dshu-amount" + (!state.available ? " dshu-amount-bad" : "") }, amount + (state.currency ? " " + state.currency : ""))
