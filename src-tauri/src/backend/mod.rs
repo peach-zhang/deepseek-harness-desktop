@@ -167,6 +167,7 @@ impl BackendManager {
                 "127.0.0.1".into(),
                 "--port".into(),
                 "0".into(),
+                "--no-open".into(),
             ])
             .env("DSH_HOME", dsh_home)
             .env("DSH_AGENTS_HOME", agents_home)
