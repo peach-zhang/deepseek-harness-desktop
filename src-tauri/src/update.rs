@@ -30,6 +30,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use flate2::read::GzDecoder;
 use semver::Version;
@@ -51,6 +54,30 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(180);
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(900);
 const MAX_METADATA_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES: u64 = 96 * 1024 * 1024;
+/// Windows-only: prevents a visible console window from flashing when spawning
+/// the bundled Node.js sidecar from the GUI process.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Total number of progress stages emitted during a Harness update; exposed so
+/// the frontend can render a "step N/M" indicator.
+pub(crate) const UPDATE_STAGE_TOTAL: usize = 4;
+
+/// A single labelled step within the Harness update flow. The `description`
+/// is shown directly in the UI, so it stays in Chinese to match the rest of
+/// the desktop shell.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UpdateStage {
+    pub index: usize,
+    pub description: &'static str,
+}
+
+impl UpdateStage {
+    pub const CHECKING_REGISTRY: Self = Self { index: 1, description: "检查更新源" };
+    pub const DOWNLOADING_NPM: Self = Self { index: 2, description: "下载 npm CLI" };
+    pub const INSTALLING_HARNESS: Self = Self { index: 3, description: "安装 Harness" };
+    pub const FINALIZING: Self = Self { index: 4, description: "应用更新" };
+}
 
 pub(crate) struct RuntimeSelection {
     pub entry: PathBuf,
@@ -59,6 +86,7 @@ pub(crate) struct RuntimeSelection {
 
 pub(crate) enum UpdateNotice {
     Checking { current: String },
+    Staging { stage: UpdateStage, target: String },
     Updating { target: String },
 }
 
@@ -87,6 +115,10 @@ pub(crate) fn select_harness_runtime(
     notify(UpdateNotice::Checking {
         current: current.version.clone(),
     });
+    notify(UpdateNotice::Staging {
+        stage: UpdateStage::CHECKING_REGISTRY,
+        target: current.version.clone(),
+    });
 
     let registry = registry_base();
     let check_agent = http_agent(CHECK_TIMEOUT);
@@ -113,8 +145,9 @@ pub(crate) fn select_harness_runtime(
     });
 
     let download_agent = http_agent(DOWNLOAD_TIMEOUT);
-    let updated = node_sidecar_path()
-        .and_then(|node| install_updated_runtime(&node, data_dir, &registry, &download_agent, &target));
+    let updated = node_sidecar_path().and_then(|node| {
+        install_updated_runtime(&node, data_dir, &registry, &download_agent, &target, notify)
+    });
     match updated {
         Ok(selection) => {
             log::info!("Harness updated to {}.", selection.version);
@@ -330,10 +363,16 @@ fn install_updated_runtime(
     registry: &str,
     agent: &ureq::Agent,
     target: &Version,
+    notify: &mut dyn FnMut(UpdateNotice),
 ) -> Result<RuntimeSelection, String> {
+    let version = target.to_string();
+
+    notify(UpdateNotice::Staging {
+        stage: UpdateStage::DOWNLOADING_NPM,
+        target: version.clone(),
+    });
     let npm_cli = ensure_npm_cli(data_dir, registry, agent)?;
 
-    let version = target.to_string();
     let runtime_root = data_dir.join("runtime");
     fs::create_dir_all(&runtime_root).map_err(|error| format!("无法创建运行时目录:{error}"))?;
     let staging = runtime_root.join(format!(".{version}-{}.staging", std::env::consts::ARCH));
@@ -351,6 +390,11 @@ fn install_updated_runtime(
 
         let cache = data_dir.join("npm-cache");
         fs::create_dir_all(&cache).map_err(|error| format!("无法创建 npm 缓存目录:{error}"))?;
+
+        notify(UpdateNotice::Staging {
+            stage: UpdateStage::INSTALLING_HARNESS,
+            target: version.clone(),
+        });
         run_npm_install(node, &npm_cli, &staging, &cache, registry)?;
 
         let staged_entry = staging
@@ -363,6 +407,10 @@ fn install_updated_runtime(
             return Err("更新安装结果不完整，缺少 Harness 入口。".into());
         }
 
+        notify(UpdateNotice::Staging {
+            stage: UpdateStage::FINALIZING,
+            target: version.clone(),
+        });
         let (destination, entry) = runtime_paths(data_dir, &version);
         if destination.exists() {
             fs::remove_dir_all(&destination)
@@ -385,8 +433,8 @@ fn run_npm_install(
     cache: &Path,
     registry: &str,
 ) -> Result<(), String> {
-    let mut child = Command::new(node)
-        .arg(npm_cli)
+    let mut cmd = Command::new(node);
+    cmd.arg(npm_cli)
         .args([
             "install",
             "--omit=dev",
@@ -404,7 +452,10 @@ fn run_npm_install(
         .env("DSH_TELEMETRY_DISABLED", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let mut child = cmd
         .spawn()
         .map_err(|error| format!("无法启动 npm 安装进程:{error}"))?;
 
@@ -599,8 +650,15 @@ mod tests {
         assert!(cli.is_file());
 
         let version = Version::parse(crate::HARNESS_VERSION).unwrap();
-        let selection = install_updated_runtime(&node, &data_dir, &registry, &agent, &version)
-            .expect("registry install should succeed");
+        let selection = install_updated_runtime(
+            &node,
+            &data_dir,
+            &registry,
+            &agent,
+            &version,
+            &mut |_| {},
+        )
+        .expect("registry install should succeed");
         assert!(selection.entry.is_file());
 
         let output = Command::new(node)

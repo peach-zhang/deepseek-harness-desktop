@@ -112,6 +112,9 @@ impl BackendManager {
                             UpdateNotice::Checking { current } => {
                                 BackendStatus::checking_update(&current)
                             }
+                            UpdateNotice::Staging { stage, target } => {
+                                BackendStatus::updating_stage(stage, &target)
+                            }
                             UpdateNotice::Updating { target } => {
                                 BackendStatus::updating(&target)
                             }

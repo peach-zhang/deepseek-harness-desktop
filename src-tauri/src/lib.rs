@@ -13,7 +13,7 @@ use std::os::windows::process::CommandExt;
 use tauri::{Manager, State};
 use tauri::webview::{DownloadEvent, WebviewWindowBuilder};
 
-pub(crate) const HARNESS_VERSION: &str = "0.1.0-rc.8";
+pub(crate) const HARNESS_VERSION: &str = "0.1.0-rc.7";
 pub(crate) const MAX_DIAGNOSTIC_LINES: usize = 12;
 
 // ── Desktop info Tauri commands ─

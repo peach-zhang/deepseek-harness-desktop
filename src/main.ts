@@ -12,6 +12,9 @@ export interface BackendStatus {
   message: string
   url: string | null
   harnessVersion: string
+  updateStage?: number
+  updateStageTotal?: number
+  updateStageDescription?: string
 }
 
 const root = document.querySelector<HTMLElement>('#app')
@@ -81,6 +84,26 @@ function escapeHtml(value: string): string {
     .replaceAll("'", '&#039;')
 }
 
+function renderUpdateProgress(status: BackendStatus): string {
+  const current = status.updateStage
+  const total = status.updateStageTotal
+  if (!current || !total) return ''
+  const description = status.updateStageDescription ?? ''
+  const steps: string[] = []
+  for (let i = 1; i <= total; i++) {
+    const state = i < current ? 'done' : i === current ? 'active' : 'pending'
+    steps.push(`<span class="update-step update-step--${state}" aria-hidden="true"></span>`)
+  }
+  return `
+    <div class="update-progress" role="status" aria-live="polite">
+      <div class="update-progress__steps">${steps.join('')}</div>
+      <div class="update-progress__label">
+        步骤 ${current}/${total}${description ? ` · ${escapeHtml(description)}` : ''}
+      </div>
+    </div>
+  `
+}
+
 function render(status: BackendStatus): void {
   const failed = status.phase === 'failed' || status.phase === 'stopped'
   appRoot.innerHTML = `
@@ -114,6 +137,7 @@ function render(status: BackendStatus): void {
             <p>${escapeHtml(status.message)}</p>
           </div>
         </div>
+        ${renderUpdateProgress(status)}
         ${failed ? '<button id="retry" type="button">重新启动</button>' : ''}
         <footer>
           <span>Harness ${escapeHtml(status.harnessVersion)}</span>
@@ -138,7 +162,7 @@ function navigateToHarness(url: string): void {
       phase: 'failed',
       message: '后台返回了不安全的地址，桌面壳已阻止跳转。',
       url: null,
-      harnessVersion: '0.1.0-rc.8',
+      harnessVersion: '0.1.0-rc.7',
     })
     return
   }
@@ -195,7 +219,7 @@ async function restart(): Promise<void> {
     phase: 'starting',
     message: '正在重新启动内置 Harness…',
     url: null,
-    harnessVersion: '0.1.0-rc.8',
+    harnessVersion: '0.1.0-rc.7',
   })
   try {
     applyStatus(await invoke<BackendStatus>('restart_backend'))
@@ -204,7 +228,7 @@ async function restart(): Promise<void> {
       phase: 'failed',
       message: String(error),
       url: null,
-      harnessVersion: '0.1.0-rc.8',
+      harnessVersion: '0.1.0-rc.7',
     })
   } finally {
     retrying = false
@@ -371,7 +395,7 @@ async function bootstrap(): Promise<void> {
     phase: 'starting',
     message: '正在启动内置 Node.js 与 DeepSeek Harness…',
     url: null,
-    harnessVersion: '0.1.0-rc.8',
+    harnessVersion: '0.1.0-rc.7',
   })
 
   await listen<BackendStatus>('backend-status', (event) => {
@@ -408,7 +432,7 @@ async function bootstrap(): Promise<void> {
       phase: 'failed',
       message: String(error),
       url: null,
-      harnessVersion: '0.1.0-rc.8',
+      harnessVersion: '0.1.0-rc.7',
     })
   }
 }

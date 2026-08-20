@@ -38,7 +38,7 @@ DSH Desktop 启动后会在随机的 `127.0.0.1` 本地端口运行 Harness 服�
 
 | 组件 | 版本 |
 | --- | --- |
-| DeepSeek Harness | `0.1.0-rc.8` |
+| DeepSeek Harness | `0.1.0-rc.7` |
 | Node.js | `24.19.0`（Krypton LTS） |
 | Tauri JavaScript API | `2.11.1` |
 | Tauri CLI | `2.11.4` |
