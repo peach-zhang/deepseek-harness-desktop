@@ -588,7 +588,7 @@ mod tests {
         });
         assert_eq!(
             latest_candidate(&metadata),
-            Some(Version::parse("0.1.0-rc.7").unwrap())
+            Some(Version::parse("0.1.0-rc.8").unwrap())
         );
     }
 
@@ -602,7 +602,7 @@ mod tests {
             Some(Version::parse("0.1.0").unwrap())
         );
         assert!(Version::parse("0.1.0").unwrap() > Version::parse("0.1.0-rc.7").unwrap());
-        assert!(Version::parse("0.1.0-rc.7").unwrap() > Version::parse("0.1.0-rc.8").unwrap());
+        assert!(Version::parse("0.1.0-rc.8").unwrap() > Version::parse("0.1.0-rc.7").unwrap());
     }
 
     #[test]
