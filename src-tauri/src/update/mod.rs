@@ -26,8 +26,10 @@
 use std::{
     fs,
     path::Path,
-    time::Duration,
 };
+
+#[cfg(windows)]
+use std::time::Duration;
 
 use semver::Version;
 
@@ -58,9 +60,6 @@ pub(crate) use install::{UpdateStage, UPDATE_STAGE_TOTAL};
 /// On non-Windows platforms this is a thin wrapper around [`fs::remove_dir_all`]
 /// (no retries needed because Unix uses inode-based semantics).
 pub(crate) fn remove_dir_all_retried(path: &Path) -> std::io::Result<()> {
-    const MAX_ATTEMPTS: u32 = 6;
-    const BASE_DELAY: Duration = Duration::from_millis(300);
-
     let result = fs::remove_dir_all(path);
     if result.is_ok() {
         return Ok(());
@@ -68,6 +67,9 @@ pub(crate) fn remove_dir_all_retried(path: &Path) -> std::io::Result<()> {
 
     #[cfg(windows)]
     {
+        const MAX_ATTEMPTS: u32 = 6;
+        const BASE_DELAY: Duration = Duration::from_millis(300);
+
         if let Some(err) = result.as_ref().err() {
             if err.raw_os_error() != Some(32) {
                 return result;
@@ -93,11 +95,13 @@ pub(crate) fn remove_dir_all_retried(path: &Path) -> std::io::Result<()> {
             }
         }
 
-        for attempt in 0..MAX_ATTEMPTS {
+        let mut attempt = 0u32;
+        loop {
             std::thread::sleep(BASE_DELAY * (1 << attempt));
 
             if let Err(error) = fs::remove_dir_all(path) {
                 if error.raw_os_error() == Some(32) && attempt + 1 < MAX_ATTEMPTS {
+                    attempt += 1;
                     continue;
                 }
                 return Err(error);
@@ -110,9 +114,6 @@ pub(crate) fn remove_dir_all_retried(path: &Path) -> std::io::Result<()> {
     {
         return result;
     }
-
-    // Unreachable, but keeps the compiler happy if cfg gates change.
-    fs::remove_dir_all(path)
 }
 
 pub(crate) struct RuntimeSelection {
