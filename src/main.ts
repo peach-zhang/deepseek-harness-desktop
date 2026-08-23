@@ -1,3 +1,4 @@
+import { HARNESS_VERSION } from './generated-version'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -30,8 +31,9 @@ const win = getCurrentWindow()
 
 // Fallback Harness version used when the backend hasn't reported one yet
 // (e.g. during early startup or after a hard failure).  The real version
-// always comes from the Rust backend via BackendStatus.
-const FALLBACK_HARNESS_VERSION = '0.1.0-rc.7'
+// always comes from the Rust backend via BackendStatus.  Imported from the
+// auto-generated `generated-version.ts` so it stays in sync with the bundle.
+const FALLBACK_HARNESS_VERSION = HARNESS_VERSION
 
 // ── Harness theme sync ──
 // The iframe is cross-origin, so the theme preference arrives from the Rust

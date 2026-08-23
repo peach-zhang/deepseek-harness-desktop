@@ -149,8 +149,8 @@ Windows 可使用 Authenticode 证书或 Microsoft Trusted Signing。请按照
 Harness 目前仍处于开发预览阶段，版本升级可能包含不兼容变更。建议按照以下流程升级：
 
 1. 修改 `runtime/package.json` 中的精确版本号。
-2. 同步修改 `src-tauri/src/lib.rs`、`src/main.ts` 和
-   `scripts/prepare-runtime.mjs` 中的 `HARNESS_VERSION`。
+2. 修改项目根目录的 `HARNESS_VERSION` 文件。Rust 构建脚本和前端常量生成器
+   都从该文件读取版本，无需再修改其他源码。
 3. 在 `runtime` 目录执行 `npm install --package-lock-only`，重新生成
    `runtime/package-lock.json`。
 4. 分别在 Windows、Apple 芯片 Mac 和 Intel Mac 上完成桌面端冒烟测试。

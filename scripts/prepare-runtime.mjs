@@ -10,9 +10,12 @@ import extractZip from 'extract-zip'
 import * as tar from 'tar'
 
 const NODE_VERSION = 'v24.19.0'
-const HARNESS_VERSION = '0.1.0-rc.7'
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const projectRoot = resolve(scriptDir, '..')
+// Single source of truth for the bundled Harness version — keep it in
+// `HARNESS_VERSION` at the project root so Rust build.rs and the frontend
+// code generator read the same value.
+const HARNESS_VERSION = (await readFile(join(projectRoot, 'HARNESS_VERSION'), 'utf8')).trim()
 const runtimeDir = join(projectRoot, 'src-tauri', 'runtime')
 const runtimePackageDir = join(projectRoot, 'runtime')
 

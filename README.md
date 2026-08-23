@@ -165,8 +165,9 @@ Harness is currently a developer preview and may make breaking changes. To
 upgrade safely:
 
 1. Change the exact version in `runtime/package.json`.
-2. Update `HARNESS_VERSION` in `src-tauri/src/lib.rs`, `src/main.ts`, and
-   `scripts/prepare-runtime.mjs`.
+2. Update the single `HARNESS_VERSION` file at the project root. The Rust
+   build script and the frontend constant generator both read from this file,
+   so no other source files need editing.
 3. Regenerate `runtime/package-lock.json` with `npm install --package-lock-only`
    from the `runtime` directory.
 4. Run the desktop smoke test on Windows, Apple Silicon, and Intel macOS.
