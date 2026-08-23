@@ -60,6 +60,23 @@ jobs:
           pnpm test
           pnpm build:web
           cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Verify GitHub API connectivity
+        shell: bash
+        run: |
+          # tauri-action attaches artifacts via api.github.com after building.
+          # Runners occasionally hit transient connect timeouts there (e.g.
+          # "HttpError: Connect Timeout Error" when fetching the draft release
+          # by tag), so warm up the connection and retry a few times first.
+          for attempt in 1 2 3 4 5; do
+            if curl -fsS --connect-timeout 10 --max-time 20 https://api.github.com/ -o /dev/null; then
+              echo "api.github.com reachable (attempt ${attempt}/5)"
+              exit 0
+            fi
+            echo "api.github.com unreachable (attempt ${attempt}/5), retrying in 5s..."
+            sleep 5
+          done
+          echo "api.github.com still unreachable after 5 attempts" >&2
+          exit 1
       - name: Build unsigned installers and attach to GitHub Release
         if: ${{ vars.ENABLE_APPLE_SIGNING != 'true' }}
         uses: tauri-apps/tauri-action@v0
