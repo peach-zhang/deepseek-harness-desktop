@@ -11,6 +11,7 @@ use std::{
 };
 
 use crate::archive::extract_guarded_archive;
+use crate::update::install::runtime_entry;
 
 pub(crate) fn ensure_harness_runtime(
     resource_dir: &Path,
@@ -19,12 +20,7 @@ pub(crate) fn ensure_harness_runtime(
     let runtime_root = data_dir.join("runtime");
     let runtime_id = format!("{}-{}", crate::HARNESS_VERSION, std::env::consts::ARCH);
     let destination = runtime_root.join(&runtime_id);
-    let entry = destination
-        .join("node_modules")
-        .join("@deepseek-ai")
-        .join("dsh")
-        .join("lib")
-        .join("bin.js");
+    let entry = runtime_entry(&destination);
     if entry.is_file() {
         return Ok(entry);
     }
@@ -41,7 +37,7 @@ pub(crate) fn ensure_harness_runtime(
         .map_err(|error| format!("无法创建运行时目录：{error}"))?;
     let staging = runtime_root.join(format!(".{runtime_id}.staging"));
     if staging.exists() {
-        fs::remove_dir_all(&staging)
+        crate::update::remove_dir_all_retried(&staging)
             .map_err(|error| format!("无法清理未完成的运行时：{error}"))?;
     }
     fs::create_dir_all(&staging)
@@ -50,22 +46,15 @@ pub(crate) fn ensure_harness_runtime(
     let unpack_result = extract_guarded_archive(&archive_path, &staging);
 
     if let Err(error) = unpack_result {
-        let _ = fs::remove_dir_all(&staging);
+        let _ = crate::update::remove_dir_all_retried(&staging);
         return Err(error);
     }
-    if !staging
-        .join("node_modules")
-        .join("@deepseek-ai")
-        .join("dsh")
-        .join("lib")
-        .join("bin.js")
-        .is_file()
-    {
-        let _ = fs::remove_dir_all(&staging);
+    if !runtime_entry(&staging).is_file() {
+        let _ = crate::update::remove_dir_all_retried(&staging);
         return Err("Harness 运行时归档不完整。".into());
     }
     if destination.exists() {
-        fs::remove_dir_all(&destination)
+        crate::update::remove_dir_all_retried(&destination)
             .map_err(|error| format!("无法替换旧运行时：{error}"))?;
     }
     fs::rename(&staging, &destination)
@@ -109,10 +98,14 @@ mod tests {
             .output()
             .expect("extracted Harness should run with bundled Node.js");
         assert!(version.status.success());
-        assert_eq!(
-            String::from_utf8_lossy(&version.stdout).trim(),
-            "0.1.0-rc.7"
-        );
+        // Read the expected version from the manifest rather than hardcoding
+        // it, so the test survives archive regeneration without code changes.
+        let manifest_path = resource_dir.join("runtime").join("runtime-manifest.json");
+        let manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&manifest_path).expect("manifest should exist"))
+                .expect("manifest should be valid JSON");
+        let expected = manifest["harness"].as_str().expect("manifest should have harness version");
+        assert_eq!(String::from_utf8_lossy(&version.stdout).trim(), expected);
         fs::remove_dir_all(&data_dir)
             .expect("temporary runtime should be removable");
     }

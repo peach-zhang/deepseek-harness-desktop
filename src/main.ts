@@ -28,6 +28,11 @@ let retrying = false
 
 const win = getCurrentWindow()
 
+// Fallback Harness version used when the backend hasn't reported one yet
+// (e.g. during early startup or after a hard failure).  The real version
+// always comes from the Rust backend via BackendStatus.
+const FALLBACK_HARNESS_VERSION = '0.1.0-rc.7'
+
 // ── Harness theme sync ──
 // The iframe is cross-origin, so the theme preference arrives from the Rust
 // side (watching $DSH_HOME/settings.yaml). 'system' is resolved here against
@@ -162,7 +167,7 @@ function navigateToHarness(url: string): void {
       phase: 'failed',
       message: '后台返回了不安全的地址，桌面壳已阻止跳转。',
       url: null,
-      harnessVersion: '0.1.0-rc.7',
+      harnessVersion: FALLBACK_HARNESS_VERSION,
     })
     return
   }
@@ -219,7 +224,7 @@ async function restart(): Promise<void> {
     phase: 'starting',
     message: '正在重新启动内置 Harness…',
     url: null,
-    harnessVersion: '0.1.0-rc.7',
+    harnessVersion: FALLBACK_HARNESS_VERSION,
   })
   try {
     applyStatus(await invoke<BackendStatus>('restart_backend'))
@@ -228,7 +233,7 @@ async function restart(): Promise<void> {
       phase: 'failed',
       message: String(error),
       url: null,
-      harnessVersion: '0.1.0-rc.7',
+      harnessVersion: FALLBACK_HARNESS_VERSION,
     })
   } finally {
     retrying = false
@@ -395,7 +400,7 @@ async function bootstrap(): Promise<void> {
     phase: 'starting',
     message: '正在启动内置 Node.js 与 DeepSeek Harness…',
     url: null,
-    harnessVersion: '0.1.0-rc.7',
+    harnessVersion: FALLBACK_HARNESS_VERSION,
   })
 
   await listen<BackendStatus>('backend-status', (event) => {
@@ -432,7 +437,7 @@ async function bootstrap(): Promise<void> {
       phase: 'failed',
       message: String(error),
       url: null,
-      harnessVersion: '0.1.0-rc.7',
+      harnessVersion: FALLBACK_HARNESS_VERSION,
     })
   }
 }

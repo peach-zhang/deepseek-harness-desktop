@@ -15,7 +15,7 @@ use std::{
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-const POLL_INTERVAL: Duration = Duration::from_micros(200);
+const POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -167,6 +167,10 @@ impl BackendManager {
                 "127.0.0.1".into(),
                 "--port".into(),
                 "0".into(),
+                // The `dsh web` command opens the default browser by default;
+                // the desktop shell already renders the UI in its own webview,
+                // so suppress the automatic browser launch.
+                "--no-open".into(),
             ])
             .env("DSH_HOME", dsh_home)
             .env("DSH_AGENTS_HOME", agents_home)

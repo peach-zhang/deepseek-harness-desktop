@@ -24,11 +24,11 @@ pub(crate) struct BackendStatus {
 }
 
 impl BackendStatus {
-    pub fn starting(version: &str) -> Self {
+    fn new(phase: &str, message: String, url: Option<String>, version: &str) -> Self {
         Self {
-            phase: "starting".into(),
-            message: "正在启动内置 DeepSeek Harness…".into(),
-            url: None,
+            phase: phase.into(),
+            message,
+            url,
             harness_version: version.into(),
             update_stage: None,
             update_stage_total: None,
@@ -36,28 +36,31 @@ impl BackendStatus {
         }
     }
 
+    pub fn starting(version: &str) -> Self {
+        Self::new(
+            "starting",
+            "正在启动内置 DeepSeek Harness…".into(),
+            None,
+            version,
+        )
+    }
+
     pub fn checking_update(current: &str) -> Self {
-        Self {
-            phase: "checking".into(),
-            message: "正在检查 DeepSeek Harness 更新…".into(),
-            url: None,
-            harness_version: current.into(),
-            update_stage: None,
-            update_stage_total: None,
-            update_stage_description: None,
-        }
+        Self::new(
+            "checking",
+            "正在检查 DeepSeek Harness 更新…".into(),
+            None,
+            current,
+        )
     }
 
     pub fn updating(target: &str) -> Self {
-        Self {
-            phase: "updating".into(),
-            message: format!("发现新版本 {target}，正在更新 DeepSeek Harness…"),
-            url: None,
-            harness_version: target.into(),
-            update_stage: None,
-            update_stage_total: None,
-            update_stage_description: None,
-        }
+        Self::new(
+            "updating",
+            format!("发现新版本 {target}，正在更新 DeepSeek Harness…"),
+            None,
+            target,
+        )
     }
 
     /// Status emitted while the update flows through its discrete steps
@@ -77,26 +80,15 @@ impl BackendStatus {
     }
 
     pub fn running(url: String, version: &str) -> Self {
-        Self {
-            phase: "running".into(),
-            message: "DeepSeek Harness 已就绪。".into(),
-            url: Some(url),
-            harness_version: version.into(),
-            update_stage: None,
-            update_stage_total: None,
-            update_stage_description: None,
-        }
+        Self::new(
+            "running",
+            "DeepSeek Harness 已就绪。".into(),
+            Some(url),
+            version,
+        )
     }
 
     pub fn failed(message: impl Into<String>, version: &str) -> Self {
-        Self {
-            phase: "failed".into(),
-            message: message.into(),
-            url: None,
-            harness_version: version.into(),
-            update_stage: None,
-            update_stage_total: None,
-            update_stage_description: None,
-        }
+        Self::new("failed", message.into(), None, version)
     }
 }

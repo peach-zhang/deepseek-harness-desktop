@@ -23,7 +23,11 @@
 //!   default npmmirror.com mirror (for example the official
 //!   https://registry.npmjs.org)
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::Path,
+    time::Duration,
+};
 
 use semver::Version;
 
@@ -38,6 +42,78 @@ pub(crate) mod install;
 pub(crate) mod registry;
 
 pub(crate) use install::{UpdateStage, UPDATE_STAGE_TOTAL};
+
+/// Removes a directory tree, retrying with exponential back-off on Windows.
+///
+/// Windows frequently fails with OS error 32 (sharing violation) when another
+/// process — antivirus, Windows Search indexer, or an orphaned Node.js child —
+/// still holds a handle on a file inside the tree. A short retry loop is
+/// usually enough to let the competing handle drain.
+///
+/// On the first sharing-violation failure we also attempt to kill any orphaned
+/// `node.exe` processes (mirroring the strategy in
+/// [`backend::commands::prepare_for_update`]). This catches leftover children
+/// from a previous backend that didn't exit cleanly.
+///
+/// On non-Windows platforms this is a thin wrapper around [`fs::remove_dir_all`]
+/// (no retries needed because Unix uses inode-based semantics).
+pub(crate) fn remove_dir_all_retried(path: &Path) -> std::io::Result<()> {
+    const MAX_ATTEMPTS: u32 = 6;
+    const BASE_DELAY: Duration = Duration::from_millis(300);
+
+    let result = fs::remove_dir_all(path);
+    if result.is_ok() {
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(err) = result.as_ref().err() {
+            if err.raw_os_error() != Some(32) {
+                return result;
+            }
+        }
+        log::debug!(
+            "remove_dir_all contention on {}, retrying with back-off",
+            path.display()
+        );
+
+        // Kill orphaned Node.js processes that may hold file locks. At this
+        // point the backend has already been stopped, so any surviving
+        // node.exe is either our orphan or stale from a prior crash.
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        if let Ok(output) = std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "node.exe"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            if output.status.success() {
+                log::debug!("killed orphaned node.exe processes during staging cleanup");
+            }
+        }
+
+        for attempt in 0..MAX_ATTEMPTS {
+            std::thread::sleep(BASE_DELAY * (1 << attempt));
+
+            if let Err(error) = fs::remove_dir_all(path) {
+                if error.raw_os_error() == Some(32) && attempt + 1 < MAX_ATTEMPTS {
+                    continue;
+                }
+                return Err(error);
+            }
+            return Ok(());
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        return result;
+    }
+
+    // Unreachable, but keeps the compiler happy if cfg gates change.
+    fs::remove_dir_all(path)
+}
 
 pub(crate) struct RuntimeSelection {
     pub entry: std::path::PathBuf,
@@ -214,7 +290,7 @@ fn cleanup_stale_runtimes(data_dir: &Path, bundled_version: &str, keep_version: 
             if name.starts_with('.') || keep.iter().any(|kept| kept == name) {
                 continue;
             }
-            if let Err(error) = fs::remove_dir_all(entry.path()) {
+            if let Err(error) = remove_dir_all_retried(&entry.path()) {
                 log::warn!("failed to remove stale Harness runtime {name}: {error}");
             } else {
                 log::info!("removed stale Harness runtime {name}");
