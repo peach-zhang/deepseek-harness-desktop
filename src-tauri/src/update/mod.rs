@@ -23,10 +23,9 @@
 //!   default npmmirror.com mirror (for example the official
 //!   https://registry.npmjs.org)
 
-use std::{
-    fs,
-    path::Path,
-};
+use std::{fs, path::Path};
+
+use tauri::Manager;
 
 #[cfg(windows)]
 use std::time::Duration;
@@ -36,8 +35,8 @@ use semver::Version;
 use crate::runtime::ensure_harness_runtime;
 use install::runtime_paths;
 use registry::{
-    http_agent, latest_candidate, registry_base, updates_disabled, fetch_json,
-    CHECK_TIMEOUT, DSH_METADATA_PATH,
+    fetch_json, http_agent, latest_candidate, registry_base, updates_disabled, CHECK_TIMEOUT,
+    DSH_METADATA_PATH,
 };
 
 pub(crate) mod install;
@@ -80,21 +79,6 @@ pub(crate) fn remove_dir_all_retried(path: &Path) -> std::io::Result<()> {
             path.display()
         );
 
-        // Kill orphaned Node.js processes that may hold file locks. At this
-        // point the backend has already been stopped, so any surviving
-        // node.exe is either our orphan or stale from a prior crash.
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        if let Ok(output) = std::process::Command::new("taskkill")
-            .args(["/F", "/IM", "node.exe"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-        {
-            if output.status.success() {
-                log::debug!("killed orphaned node.exe processes during staging cleanup");
-            }
-        }
-
         let mut attempt = 0u32;
         loop {
             std::thread::sleep(BASE_DELAY * (1 << attempt));
@@ -119,6 +103,29 @@ pub(crate) fn remove_dir_all_retried(path: &Path) -> std::io::Result<()> {
 pub(crate) struct RuntimeSelection {
     pub entry: std::path::PathBuf,
     pub version: String,
+}
+
+const FAILED_RUNTIME_FILE: &str = "failed-runtime";
+
+pub(crate) fn mark_runtime_failed(app: &tauri::AppHandle, version: &str) {
+    let Ok(data_dir) = app.path().app_data_dir() else {
+        return;
+    };
+    let marker = format!("{}\n{version}\n", env!("CARGO_PKG_VERSION"));
+    if let Err(error) = fs::write(data_dir.join(FAILED_RUNTIME_FILE), marker) {
+        log::warn!("failed to quarantine Harness runtime {version}: {error}");
+    } else {
+        log::warn!("quarantined Harness runtime {version} after startup failure");
+    }
+}
+
+fn failed_runtime(data_dir: &Path) -> Option<String> {
+    let raw = fs::read_to_string(data_dir.join(FAILED_RUNTIME_FILE)).ok()?;
+    let mut lines = raw.lines();
+    if lines.next()? != env!("CARGO_PKG_VERSION") {
+        return None;
+    }
+    lines.next().map(str::to_owned).filter(|value| !value.is_empty())
 }
 
 pub(crate) enum UpdateNotice {
@@ -169,13 +176,20 @@ pub(crate) fn select_harness_runtime(
     };
 
     let Ok(current_version) = Version::parse(&current.version) else {
-        log::warn!("installed Harness version is not semver: {}", current.version);
+        log::warn!(
+            "installed Harness version is not semver: {}",
+            current.version
+        );
         return Ok(current);
     };
     let Some(target) = candidate.filter(|target| *target > current_version) else {
         log::info!("Harness {} is up to date.", current.version);
         return Ok(current);
     };
+    if failed_runtime(data_dir).as_deref() == Some(target.to_string().as_str()) {
+        log::warn!("Harness {target} is quarantined after a previous startup failure");
+        return Ok(current);
+    }
 
     notify(UpdateNotice::Updating {
         target: target.to_string(),
@@ -209,8 +223,7 @@ pub(crate) fn select_harness_runtime(
 }
 
 fn node_sidecar_path() -> Result<std::path::PathBuf, String> {
-    let exe = std::env::current_exe()
-        .map_err(|error| format!("无法定位应用可执行文件:{error}"))?;
+    let exe = std::env::current_exe().map_err(|error| format!("无法定位应用可执行文件:{error}"))?;
     let directory = exe
         .parent()
         .ok_or_else(|| "无法定位应用安装目录。".to_owned())?;
@@ -229,11 +242,9 @@ fn installed_dir_version(name: &str) -> Option<Version> {
 }
 
 /// Newest complete runtime already on disk; the bundled version is the floor.
-fn best_installed_runtime(
-    data_dir: &Path,
-    bundled_version: &str,
-) -> Option<RuntimeSelection> {
+fn best_installed_runtime(data_dir: &Path, bundled_version: &str) -> Option<RuntimeSelection> {
     let runtime_root = data_dir.join("runtime");
+    let failed = failed_runtime(data_dir);
     let mut best = Version::parse(bundled_version).ok()?;
     let mut best_version = bundled_version.to_owned();
     if let Ok(entries) = fs::read_dir(&runtime_root) {
@@ -254,6 +265,9 @@ fn best_installed_runtime(
             let Some(version) = installed_dir_version(name) else {
                 continue;
             };
+            if failed.as_deref() == Some(version.to_string().as_str()) {
+                continue;
+            }
             let (_, entry_path) = runtime_paths(data_dir, &version.to_string());
             if !entry_path.is_file() {
                 continue;
@@ -317,6 +331,30 @@ mod tests {
         assert_eq!(installed_dir_version("0.1.0-rc.8"), None);
     }
 
+    #[test]
+    fn skips_quarantined_runtime() {
+        let data_dir = std::env::temp_dir().join(format!(
+            "dsh-desktop-quarantine-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&data_dir);
+        for version in ["0.1.0-rc.7", "0.1.0-rc.8"] {
+            let (_, entry) = runtime_paths(&data_dir, version);
+            fs::create_dir_all(entry.parent().unwrap()).unwrap();
+            fs::write(entry, "entry").unwrap();
+        }
+        fs::write(
+            data_dir.join(FAILED_RUNTIME_FILE),
+            format!("{}\n0.1.0-rc.8\n", env!("CARGO_PKG_VERSION")),
+        )
+        .unwrap();
+
+        let selected = best_installed_runtime(&data_dir, "0.1.0-rc.7").unwrap();
+        assert_eq!(selected.version, "0.1.0-rc.7");
+
+        fs::remove_dir_all(&data_dir).unwrap();
+    }
+
     /// Exercises the real download + install path against the live registry.
     /// Run explicitly with: cargo test -- --ignored
     #[test]
@@ -325,10 +363,8 @@ mod tests {
         let node = std::env::var("DSH_TEST_NODE")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from(if cfg!(windows) { "node.exe" } else { "node" }));
-        let data_dir = std::env::temp_dir().join(format!(
-            "dsh-desktop-update-test-{}",
-            std::process::id()
-        ));
+        let data_dir =
+            std::env::temp_dir().join(format!("dsh-desktop-update-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&data_dir);
         fs::create_dir_all(&data_dir).expect("test data dir should be creatable");
 
@@ -340,7 +376,12 @@ mod tests {
 
         let version = Version::parse(crate::HARNESS_VERSION).unwrap();
         let selection = install::install_updated_runtime(
-            &node, &data_dir, &registry, &agent, &version, &mut |_| {},
+            &node,
+            &data_dir,
+            &registry,
+            &agent,
+            &version,
+            &mut |_| {},
         )
         .expect("registry install should succeed");
         assert!(selection.entry.is_file());

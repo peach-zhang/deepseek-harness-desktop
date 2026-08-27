@@ -1,3 +1,4 @@
+import { escapeHtml, parseHarnessUrl, updateProgress } from './bootstrap-utils'
 import { HARNESS_VERSION } from './generated-version'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -82,30 +83,17 @@ function updateTitlebarIcons(): void {
   void updateMaximizeIcon()
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;')
-}
-
 function renderUpdateProgress(status: BackendStatus): string {
-  const current = status.updateStage
-  const total = status.updateStageTotal
-  if (!current || !total) return ''
-  const description = status.updateStageDescription ?? ''
-  const steps: string[] = []
-  for (let i = 1; i <= total; i++) {
-    const state = i < current ? 'done' : i === current ? 'active' : 'pending'
-    steps.push(`<span class="update-step update-step--${state}" aria-hidden="true"></span>`)
-  }
+  const progress = updateProgress(status)
+  if (!progress) return ''
+  const steps = progress.states.map(
+    (state) => `<span class="update-step update-step--${state}" aria-hidden="true"></span>`,
+  )
   return `
     <div class="update-progress" role="status" aria-live="polite">
       <div class="update-progress__steps">${steps.join('')}</div>
       <div class="update-progress__label">
-        步骤 ${current}/${total}${description ? ` · ${escapeHtml(description)}` : ''}
+        步骤 ${progress.current}/${progress.total}${progress.description ? ` · ${escapeHtml(progress.description)}` : ''}
       </div>
     </div>
   `
@@ -163,8 +151,8 @@ function render(status: BackendStatus): void {
 }
 
 function navigateToHarness(url: string): void {
-  const parsed = new URL(url)
-  if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1') {
+  const parsed = parseHarnessUrl(url)
+  if (!parsed) {
     render({
       phase: 'failed',
       message: '后台返回了不安全的地址，桌面壳已阻止跳转。',

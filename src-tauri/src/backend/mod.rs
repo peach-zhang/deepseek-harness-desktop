@@ -3,11 +3,7 @@ mod status;
 
 pub(crate) use status::BackendStatus;
 
-use std::{
-    collections::VecDeque,
-    fs,
-    sync::Arc,
-};
+use std::{collections::VecDeque, fs, sync::Arc, time::Duration};
 
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_shell::{
@@ -62,9 +58,7 @@ impl BackendManager {
         let mut runtime = self.inner.lock().await;
         runtime.generation = runtime.generation.wrapping_add(1);
         if let Some(child) = runtime.child.take() {
-            if let Err(error) = child.kill() {
-                log::warn!("failed to stop Harness sidecar: {error}");
-            }
+            stop_child(child);
         }
     }
 
@@ -115,9 +109,7 @@ impl BackendManager {
                             UpdateNotice::Staging { stage, target } => {
                                 BackendStatus::updating_stage(stage, &target)
                             }
-                            UpdateNotice::Updating { target } => {
-                                BackendStatus::updating(&target)
-                            }
+                            UpdateNotice::Updating { target } => BackendStatus::updating(&target),
                         };
                         emit_status(&app_for_update, status);
                     },
@@ -151,7 +143,8 @@ impl BackendManager {
         // Install the Cordis plugins bundled with this desktop app into the
         // Harness `web` profile before it boots. Best-effort: a failure is
         // logged and never blocks startup.
-        if let Err(error) = crate::plugins::sync_bundled_plugins(&resource_dir, &data_dir, &dsh_home)
+        if let Err(error) =
+            crate::plugins::sync_bundled_plugins(&resource_dir, &data_dir, &dsh_home)
         {
             log::warn!("bundled plugin installation failed: {error}");
         }
@@ -184,11 +177,35 @@ impl BackendManager {
         {
             let mut runtime = self.inner.lock().await;
             if runtime.generation != generation {
-                let _ = child.kill();
+                stop_child(child);
                 return Ok(runtime.status.clone());
             }
             runtime.child = Some(child);
         }
+
+        let timeout_manager = self.clone();
+        let timeout_app = app.clone();
+        let timeout_version = selected_version.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(45)).await;
+            let mut runtime = timeout_manager.inner.lock().await;
+            if runtime.generation != generation || runtime.status.phase != "starting" {
+                return;
+            }
+            if let Some(child) = runtime.child.take() {
+                stop_child(child);
+            }
+            let status = BackendStatus::failed(
+                "DeepSeek Harness 启动超时，未在 45 秒内报告就绪。",
+                &timeout_version,
+            );
+            runtime.status = status.clone();
+            drop(runtime);
+            if timeout_version != HARNESS_VERSION {
+                update::mark_runtime_failed(&timeout_app, &timeout_version);
+            }
+            emit_status(&timeout_app, status);
+        });
 
         let manager = self.clone();
         let app_for_events = app.clone();
@@ -241,10 +258,13 @@ impl BackendManager {
                         } else {
                             format!("DeepSeek Harness 意外停止（{suffix}）：{detail}")
                         };
-                        let status =
-                            BackendStatus::failed(message, &runtime.harness_version.clone());
+                        let failed_version = runtime.harness_version.clone();
+                        let status = BackendStatus::failed(message, &failed_version);
                         runtime.status = status.clone();
                         drop(runtime);
+                        if failed_version != HARNESS_VERSION {
+                            update::mark_runtime_failed(&app_for_events, &failed_version);
+                        }
                         emit_status(&app_for_events, status);
                         break;
                     }
@@ -269,6 +289,25 @@ fn readiness_url(line: &str) -> Option<String> {
         return None;
     }
     Some(parsed.to_string())
+}
+
+fn stop_child(child: CommandChild) {
+    let pid = child.pid();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let status = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+        if status.is_ok_and(|status| status.success()) {
+            return;
+        }
+    }
+    if let Err(error) = child.kill() {
+        log::warn!("failed to stop Harness sidecar {pid}: {error}");
+    }
 }
 
 pub(crate) fn emit_status(app: &AppHandle, status: BackendStatus) {

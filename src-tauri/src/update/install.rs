@@ -17,9 +17,9 @@ use semver::Version;
 use serde_json::Value;
 use sha2::{Digest, Sha512};
 
-use crate::archive::safe_archive_path;
 use super::registry::fetch_json;
 use super::RuntimeSelection;
+use crate::archive::safe_archive_path;
 
 /// Windows-only: prevents a visible console window from flashing when spawning
 /// the bundled Node.js sidecar from the GUI process.
@@ -98,8 +98,7 @@ pub(crate) fn ensure_npm_cli(
         .ok_or_else(|| "npm 元数据缺少完整性校验值。".to_owned())?;
 
     let bytes = fetch_archive(agent, tarball)?;
-    verify_sha512(&bytes, integrity)
-        .map_err(|error| format!("npm CLI 包校验失败:{error}"))?;
+    verify_sha512(&bytes, integrity).map_err(|error| format!("npm CLI 包校验失败:{error}"))?;
 
     let staging = data_dir
         .join("npm-cli")
@@ -108,8 +107,7 @@ pub(crate) fn ensure_npm_cli(
         super::remove_dir_all_retried(&staging)
             .map_err(|error| format!("无法清理 npm CLI 暂存目录:{error}"))?;
     }
-    fs::create_dir_all(&staging)
-        .map_err(|error| format!("无法创建 npm CLI 暂存目录:{error}"))?;
+    fs::create_dir_all(&staging).map_err(|error| format!("无法创建 npm CLI 暂存目录:{error}"))?;
 
     let extract_result = extract_npm_package(&bytes, &staging);
     if let Err(error) = extract_result {
@@ -150,27 +148,24 @@ pub(crate) fn install_updated_runtime(
     log::debug!("npm CLI ready: {}", npm_cli.display());
 
     let runtime_root = data_dir.join("runtime");
-    fs::create_dir_all(&runtime_root)
-        .map_err(|error| format!("无法创建运行时目录:{error}"))?;
+    fs::create_dir_all(&runtime_root).map_err(|error| format!("无法创建运行时目录:{error}"))?;
     let staging = runtime_root.join(format!(".{version}-{}.staging", std::env::consts::ARCH));
     if staging.exists() {
         super::remove_dir_all_retried(&staging)
             .map_err(|error| format!("无法清理更新暂存目录:{error}"))?;
     }
-    fs::create_dir_all(&staging)
-        .map_err(|error| format!("无法创建更新暂存目录:{error}"))?;
+    fs::create_dir_all(&staging).map_err(|error| format!("无法创建更新暂存目录:{error}"))?;
 
     let result = (|| -> Result<RuntimeSelection, String> {
         let cache = data_dir.join("npm-cache");
-        fs::create_dir_all(&cache)
-            .map_err(|error| format!("无法创建 npm 缓存目录:{error}"))?;
+        fs::create_dir_all(&cache).map_err(|error| format!("无法创建 npm 缓存目录:{error}"))?;
 
         notify(UpdateNotice::Staging {
             stage: UpdateStage::INSTALLING_HARNESS,
             target: version.clone(),
         });
-        log::debug!("starting npm install -g for Harness @latest (target was {version})");
-        run_npm_install(node, &npm_cli, &staging, &cache, registry)?;
+        log::debug!("starting npm install -g for Harness {version}");
+        run_npm_install(node, &npm_cli, &staging, &cache, registry, &version)?;
         log::debug!("npm install completed, verifying staged entry");
 
         let staged_entry = runtime_entry(&staging);
@@ -187,8 +182,13 @@ pub(crate) fn install_updated_runtime(
                     .ok()
                     .and_then(|pkg| pkg.get("version")?.as_str().map(String::from))
             })
-            .unwrap_or_else(|| version.clone());
-        log::debug!("Harness @latest resolved to {installed_version}");
+            .ok_or_else(|| "更新安装结果缺少有效的 Harness 版本。".to_owned())?;
+        if installed_version != version {
+            return Err(format!(
+                "更新版本校验失败：请求 {version}，实际安装 {installed_version}。"
+            ));
+        }
+        log::debug!("Harness {installed_version} installed and verified");
 
         notify(UpdateNotice::Staging {
             stage: UpdateStage::FINALIZING,
@@ -199,8 +199,7 @@ pub(crate) fn install_updated_runtime(
             super::remove_dir_all_retried(&destination)
                 .map_err(|error| format!("无法替换旧版本运行时:{error}"))?;
         }
-        fs::rename(&staging, &destination)
-            .map_err(|error| format!("无法启用新运行时:{error}"))?;
+        fs::rename(&staging, &destination).map_err(|error| format!("无法启用新运行时:{error}"))?;
         Ok(RuntimeSelection {
             entry,
             version: installed_version,
@@ -219,6 +218,7 @@ fn run_npm_install(
     staging: &Path,
     cache: &Path,
     registry: &str,
+    version: &str,
 ) -> Result<(), String> {
     log::debug!(
         "npm install: node={} npm_cli={} staging={} registry={}",
@@ -260,7 +260,7 @@ fn run_npm_install(
             // Install the Harness package directly rather than through a
             // package.json dependency — global mode doesn't read
             // package.json for the install target list.
-            "@deepseek-ai/dsh@latest",
+            &format!("@deepseek-ai/dsh@{version}"),
         ])
         .current_dir(staging)
         .env("npm_config_cache", cache)
@@ -333,7 +333,9 @@ fn run_npm_install(
                 let _ = stderr_thread.join();
                 return Err(format!(
                     "npm install 失败（退出码 {}，耗时 {:.1}s）。",
-                    status.code().map_or("未知".to_owned(), |code| code.to_string()),
+                    status
+                        .code()
+                        .map_or("未知".to_owned(), |code| code.to_string()),
                     elapsed.as_secs_f64(),
                 ));
             }
@@ -393,9 +395,7 @@ fn fetch_archive(agent: &ureq::Agent, url: &str) -> Result<Vec<u8>, String> {
 
 /// The `node_modules/@deepseek-ai/dsh` directory inside an extracted runtime.
 pub(crate) fn runtime_package_dir(base: &Path) -> PathBuf {
-    base.join("node_modules")
-        .join("@deepseek-ai")
-        .join("dsh")
+    base.join("node_modules").join("@deepseek-ai").join("dsh")
 }
 
 /// The `bin.js` entry point inside an extracted Harness runtime tree.
@@ -428,10 +428,7 @@ fn extract_npm_package(bytes: &[u8], destination: &Path) -> Result<(), String> {
             .into_owned();
         let mut components = raw_path.components();
         if components.next() != Some(Component::Normal("package".as_ref())) {
-            return Err(format!(
-                "归档包含非 package 路径：{}",
-                raw_path.display()
-            ));
+            return Err(format!("归档包含非 package 路径：{}", raw_path.display()));
         }
         let stripped: PathBuf = components.collect();
         if stripped.as_os_str().is_empty() {
@@ -443,21 +440,16 @@ fn extract_npm_package(bytes: &[u8], destination: &Path) -> Result<(), String> {
         let target = destination.join(&stripped);
         let entry_type = entry.header().entry_type();
         if entry_type.is_dir() {
-            fs::create_dir_all(&target)
-                .map_err(|error| format!("无法创建目录:{error}"))?;
+            fs::create_dir_all(&target).map_err(|error| format!("无法创建目录:{error}"))?;
         } else if entry_type.is_file() {
             if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|error| format!("无法创建目录:{error}"))?;
+                fs::create_dir_all(parent).map_err(|error| format!("无法创建目录:{error}"))?;
             }
             entry
                 .unpack(&target)
                 .map_err(|error| format!("无法解包文件:{error}"))?;
         } else {
-            return Err(format!(
-                "归档包含不支持的条目类型：{}",
-                stripped.display()
-            ));
+            return Err(format!("归档包含不支持的条目类型：{}", stripped.display()));
         }
     }
     Ok(())

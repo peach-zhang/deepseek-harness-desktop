@@ -10,8 +10,12 @@ permissions:
 
 jobs:
   verify:
-    name: Verify desktop source
-    runs-on: macos-26
+    name: Verify desktop source (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-26]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -27,7 +31,7 @@ jobs:
       - name: Install source dependencies
         run: pnpm install --frozen-lockfile
       - name: Prepare pinned self-contained runtime
-        run: pnpm runtime:prepare -- --target aarch64-apple-darwin
+        run: pnpm runtime:prepare -- --target ${{ runner.os == 'Windows' && 'x86_64-pc-windows-msvc' || 'aarch64-apple-darwin' }}
       - name: Check and test
         run: |
           pnpm test

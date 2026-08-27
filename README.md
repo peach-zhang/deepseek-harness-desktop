@@ -14,18 +14,13 @@ install Node.js or run `npx @deepseek-ai/dsh web`.
 
 ## Download
 
-**Current release: [DSH Desktop v0.1.5](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/tag/v0.1.5)**
+**Current release: [DSH Desktop v0.1.10](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.10)**
 
-| Platform | Recommended download |
-| --- | --- |
-| Windows x64 | [EXE installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.5/DSH.Desktop_0.1.5_x64-setup.exe) |
-| Windows x64 (managed deployment) | [MSI installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.5/DSH.Desktop_0.1.5_x64_zh-CN.msi) |
-| Apple Silicon Mac | [DMG installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.5/DSH.Desktop_0.1.5_aarch64.dmg) |
-| Intel Mac | [DMG installer](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/download/v0.1.5/DSH.Desktop_0.1.5_x64.dmg) |
-
-You can always find the newest version on the
-[Latest Release](https://github.com/xunxingyuan/deepseek-harness-desktop/releases/latest)
-page.
+Windows x64 and macOS installers are available from the
+[Latest Release](https://github.com/peach-zhang/deepseek-harness-desktop/releases/latest)
+page. Choose the `.exe` installer for Windows, or the DMG matching the Mac's
+Apple Silicon (`aarch64`) or Intel (`x64`) architecture. An MSI is also provided
+for managed Windows deployments.
 
 > Starting with v0.1.2, macOS installers are signed with Apple Developer ID and
 > submitted to Apple for notarization.
@@ -121,8 +116,8 @@ committed.
 3. Commit and push a matching tag, for example:
 
 ```bash
-git tag v0.1.5
-git push origin v0.1.5
+git tag v0.1.10
+git push origin v0.1.10
 ```
 
 The release workflow builds these targets on native GitHub-hosted runners:
