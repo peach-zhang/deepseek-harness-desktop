@@ -6,7 +6,8 @@
   "packageManager": "pnpm@10.14.0",
   "scripts": {
     "dev": "tauri dev",
-    "build:web": "tsc --noEmit && vite build",
+    "version:generate": "node scripts/generate-version.mjs",
+    "build:web": "pnpm version:generate && tsc --noEmit && vite build",
     "runtime:prepare": "node scripts/prepare-runtime.mjs",
     "build:desktop": "pnpm runtime:prepare && tauri build",
     "check": "tsc --noEmit && cargo check --manifest-path src-tauri/Cargo.toml",
