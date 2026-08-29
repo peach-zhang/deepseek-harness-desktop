@@ -140,13 +140,19 @@ impl BackendManager {
             .and_then(|_| fs::create_dir_all(&agents_home))
             .map_err(|error| format!("无法准备 Harness 数据目录：{error}"))?;
 
-        // Install the Cordis plugins bundled with this desktop app into the
-        // Harness `web` profile before it boots. Best-effort: a failure is
-        // logged and never blocks startup.
-        if let Err(error) =
-            crate::plugins::sync_bundled_plugins(&resource_dir, &data_dir, &dsh_home)
+        // Install the registry plugins listed by the desktop JSON manifest
+        // before the Harness web profile boots. Best-effort: an unavailable
+        // registry must not prevent the desktop from starting.
+        if let Err(error) = crate::plugins::sync_configured_plugins(
+            &app,
+            &resource_dir,
+            &dsh_home,
+            &working_dir,
+            &entry,
+        )
+        .await
         {
-            log::warn!("bundled plugin installation failed: {error}");
+            log::warn!("configured plugin installation failed: {error}");
         }
 
         let command = app

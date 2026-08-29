@@ -14,7 +14,7 @@ install Node.js or run `npx @deepseek-ai/dsh web`.
 
 ## Download
 
-**Current release: [DSH Desktop v0.1.10](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.10)**
+**Current release: [DSH Desktop v0.1.11](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.11)**
 
 Windows x64 and macOS installers are available from the
 [Latest Release](https://github.com/peach-zhang/deepseek-harness-desktop/releases/latest)
@@ -68,22 +68,19 @@ registry). Environment overrides:
 | `DSH_DESKTOP_UPDATE_DISABLED=1` | Skip the startup update check entirely |
 | `DSH_DESKTOP_REGISTRY=<url>` | Use another registry, for example the official `https://registry.npmjs.org` |
 
-## Bundled Harness plugins
+## Harness plugins
 
-Every npm package under the [`src-tauri/plugins/`](src-tauri/plugins/)
-directory is a Cordis plugin that ships inside the installer and is
-**enabled by default**: on launch the app copies each package into the
-Harness `web` profile (`<app-data>/harness/profiles/web`), records it as a
-dependency, and appends it to the profile's `dsh.profile.bundles` layer list
-when the package declares `dsh.bundle.patch` — the same thing
-`dsh plugin --profile web add` does. The install is idempotent and re-runs
-only when a bundled plugin's version changes or an installed copy goes
-missing; failures are logged and never block startup.
+[`src-tauri/plugins/plugins.json`](src-tauri/plugins/plugins.json) lists the
+registry plugins enabled by the desktop app. Each entry contains its package
+`name` and explicit `command`. On launch, the app validates and runs each
+command with the bundled DSH CLI, equivalent to
+`dsh plugin --profile web add <name>`. A successful configuration is recorded
+so later launches skip installation unless the JSON list changes or an
+installed package is missing. Installation failures are logged and never block
+startup.
 
-See
-[`src-tauri/plugins/README.md`](src-tauri/plugins/README.md) for the package
-format and authoring rules. During development, point the app at a plugin
-directory with `DSH_DESKTOP_PLUGINS_DIR=<path>`.
+The installer contains only this JSON manifest; plugin package sources are not
+stored under `src-tauri/plugins/` or bundled into a separate archive.
 
 ## Local development
 
@@ -116,8 +113,8 @@ committed.
 3. Commit and push a matching tag, for example:
 
 ```bash
-git tag v0.1.10
-git push origin v0.1.10
+git tag v0.1.11
+git push origin v0.1.11
 ```
 
 The release workflow builds these targets on native GitHub-hosted runners:

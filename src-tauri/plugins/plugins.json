@@ -1,0 +1,10 @@
+[
+  {
+    "name": "dsh-plugin-deepseek-usage",
+    "command": "dsh plugin --profile web add dsh-plugin-deepseek-usage"
+  },
+  {
+    "name": "dsh-sync-client",
+    "command": "dsh plugin --profile web add dsh-sync-client"
+  }
+]

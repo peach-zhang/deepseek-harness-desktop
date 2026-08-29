@@ -14,7 +14,7 @@ Harness 及其 Web UI 均已内置，无需安装 Node.js，也不需要手动�
 
 ## 下载
 
-**当前版本：[DSH Desktop v0.1.10](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.10)**
+**当前版本：[DSH Desktop v0.1.11](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.11)**
 
 Windows x64 和 macOS 安装包统一从
 [最新版下载页面](https://github.com/peach-zhang/deepseek-harness-desktop/releases/latest)
@@ -58,19 +58,17 @@ DSH Desktop 启动后会在随机的 `127.0.0.1` 本地端口运行 Harness 服�
 | `DSH_DESKTOP_UPDATE_DISABLED=1` | 完全跳过启动时的更新检查 |
 | `DSH_DESKTOP_REGISTRY=<url>` | 改用其他 registry，例如官方源 `https://registry.npmjs.org` |
 
-## 内置 Harness 插件
+## Harness 插件
 
-[`src-tauri/plugins/`](src-tauri/plugins/) 目录下的每个 npm 包都是一个 Cordis
-插件，会随安装包分发并**默认启用**：启动时应用把每个插件包复制到 Harness 的
-`web` profile（`<应用数据目录>/harness/profiles/web`），登记为依赖；当包的
-`package.json` 声明 `dsh.bundle.patch` 时，还会把插件追加到该 profile 的
-`dsh.profile.bundles` 层列表——与 `dsh plugin --profile web add` 的效果一致。
-安装是幂等的，仅当内置插件的版本发生变化或已安装副本缺失时才重新同步；
-安装失败只会记录日志，不会阻止启动。
+[`src-tauri/plugins/plugins.json`](src-tauri/plugins/plugins.json) 列出桌面端默认启用的
+registry 插件。每项包含包的 `name` 和显式 `command`；应用启动时校验命令并使用
+内置 DSH CLI 把每个包安装到 Harness 的 `web` profile，效果等同于
+`dsh plugin --profile web add <name>`。成功安装后会记录当前
+配置；仅当 JSON 列表变化或已安装包缺失时才重新安装。安装失败只记录日志，不会
+阻止桌面端启动。
 
-插件包格式与编写规则见
-[`src-tauri/plugins/README.md`](src-tauri/plugins/README.md)。开发时可用
-`DSH_DESKTOP_PLUGINS_DIR=<路径>` 让应用直接读取某个插件目录。
+安装包只携带这份 JSON 清单，不再在 `src-tauri/plugins/` 中保存插件源码，也不再
+生成单独的插件归档。
 
 ## 本地开发
 
@@ -103,8 +101,8 @@ pnpm build:desktop
 3. 创建并推送相同版本的标签，例如：
 
 ```bash
-git tag v0.1.10
-git push origin v0.1.10
+git tag v0.1.11
+git push origin v0.1.11
 ```
 
 GitHub Actions 会在官方托管的原生运行器上构建以下目标：

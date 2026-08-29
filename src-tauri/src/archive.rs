@@ -1,8 +1,8 @@
 //! Safe tar.gz archive extraction with path-traversal guards.
 //!
-//! Shared by the bundled Harness runtime extraction, npm package unpacking,
-//! and bundled plugin installation. Every entry is validated against directory
-//! traversal so extraction can never escape the target staging directory.
+//! Shared by the bundled Harness runtime extraction and npm package unpacking.
+//! Every entry is validated against directory traversal so extraction can never
+//! escape the target staging directory.
 
 use std::{
     fs::File,

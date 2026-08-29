@@ -1,684 +1,278 @@
-//! Bundled Cordis plugin installation for the Harness `web` profile.
+//! Installation of registry plugins configured by `plugins/plugins.json`.
 //!
-//! Every npm package under the repo's `src-tauri/plugins/` directory is a
-//! Cordis plugin: its `package.json` declares `"dsh": { "bundle": { "patch":
-//! "./cordis.patch.yml" } }`, and that patch file inserts the plugin's
-//! entries into the profile composition. `scripts/prepare-runtime.mjs` packs
-//! those directories into `plugins.tar.gz`, which ships inside the installer
-//! next to the Harness runtime.
-//!
-//! On launch we install the bundled plugins into
-//! `<data_dir>/harness/profiles/web` (the profile `dsh web` boots): each
-//! package is copied into the profile's `node_modules`, recorded as a
-//! dependency, and — when it declares a bundle patch — appended to the
-//! profile's `dsh.profile.bundles` layer list so it is enabled by default,
-//! exactly like `dsh plugin --profile web add <package>` would do.
-//!
-//! Synchronization is idempotent: a marker file
-//! (`.dsh-desktop-plugin-sync.json`) records the installed `name -> version`
-//! set, and a launch only re-syncs when the bundled set changed or an
-//! installed package directory went missing. Sync failures are reported to
-//! the caller, which logs them and keeps booting — the Harness simply runs
-//! without the bundled plugins.
-//!
-//! Environment override for development builds (which do not bundle the
-//! archive): `DSH_DESKTOP_PLUGINS_DIR=<path>` points at a directory holding
-//! the same package subdirectories.
+//! The desktop package ships only a small JSON manifest. On launch, each
+//! listed package is installed into the Harness `web` profile through the
+//! bundled DSH CLI. A marker avoids repeating successful installs while a
+//! missing installed package triggers a repair on the next launch.
 
-use std::{
-    fs,
-    path::{Component, Path, PathBuf},
-};
+use std::{fs, path::Path};
 
-use serde_json::{json, Map, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use tauri::AppHandle;
+use tauri_plugin_shell::ShellExt;
 
-const BUNDLED_ARCHIVE_NAME: &str = "plugins.tar.gz";
-const PLUGINS_DIR_ENV: &str = "DSH_DESKTOP_PLUGINS_DIR";
+const CONFIG_PATH: &str = "plugins/plugins.json";
 const PROFILE_NAME: &str = "web";
 const MARKER_FILENAME: &str = ".dsh-desktop-plugin-sync.json";
-const PROFILE_PATCH_TEMPLATE: &str = "# Managed by DSH Desktop: bundled plugins ship their own patch layers.\n# Add your own profile entries below.\n[]\n";
-const PROFILE_PNPM_WORKSPACE: &str = "packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n";
-const WEB_PROFILE_BUNDLES: &[&str] = &["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"];
 
-/// One bundled plugin package, validated enough to install safely.
-struct PluginPackage {
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PluginSpec {
     name: String,
-    version: String,
-    dir: PathBuf,
-    /// Relative path of the bundle patch inside the package, when declared.
-    bundle_patch: Option<PathBuf>,
+    command: String,
 }
 
-/// Where the bundled plugin packages come from this launch.
-enum BundledSource {
-    /// No bundled plugins available (no archive, no env override).
-    None,
-    /// Loose package directories (dev override via `DSH_DESKTOP_PLUGINS_DIR`).
-    Directory(PathBuf),
-    /// Archive extracted into a staging directory to remove after the sync.
-    Staging(PathBuf),
-}
-
-/// Install (or refresh) the bundled plugins for the Harness `web` profile.
-///
-/// `resource_dir` is the Tauri resource directory holding the bundled
-/// `runtime/plugins.tar.gz`; `data_dir` is the per-user app data directory;
-/// `dsh_home` is the Harness home the backend boots (`<data_dir>/harness`).
-pub(crate) fn sync_bundled_plugins(
+/// Install the plugins declared by the desktop JSON manifest.
+pub(crate) async fn sync_configured_plugins(
+    app: &AppHandle,
     resource_dir: &Path,
-    data_dir: &Path,
     dsh_home: &Path,
+    working_dir: &Path,
+    entry: &Path,
 ) -> Result<(), String> {
-    let source = match bundled_source(resource_dir, data_dir) {
-        Ok(source) => source,
-        Err(error) => {
-            // The archive is optional; a broken override must not hide a
-            // working install, but nothing here is fatal.
-            log::warn!("bundled plugin source unavailable: {error}");
-            return Ok(());
-        }
-    };
-    let result = match &source {
-        BundledSource::None => return Ok(()),
-        BundledSource::Directory(dir) => sync_from_directory(dir, dsh_home),
-        BundledSource::Staging(dir) => sync_from_directory(dir, dsh_home),
-    };
-    if let BundledSource::Staging(dir) = &source {
-        let _ = fs::remove_dir_all(dir);
-    }
-    result
-}
-
-fn bundled_source(resource_dir: &Path, data_dir: &Path) -> Result<BundledSource, String> {
-    let archive_path = resource_dir.join("runtime").join(BUNDLED_ARCHIVE_NAME);
-    if archive_path.is_file() {
-        let staging = data_dir.join("plugins-bundled");
-        if staging.exists() {
-            fs::remove_dir_all(&staging)
-                .map_err(|error| format!("无法清理插件暂存目录:{error}"))?;
-        }
-        fs::create_dir_all(&staging)
-            .map_err(|error| format!("无法创建插件暂存目录:{error}"))?;
-        crate::archive::extract_guarded_archive(&archive_path, &staging)?;
-        return Ok(BundledSource::Staging(staging));
-    }
-    if let Ok(dir) = std::env::var(PLUGINS_DIR_ENV) {
-        let dir = PathBuf::from(dir);
-        if dir.is_dir() {
-            log::info!(
-                "using bundled plugins from {PLUGINS_DIR_ENV}={}",
-                dir.display()
-            );
-            return Ok(BundledSource::Directory(dir));
-        }
-        log::warn!(
-            "{PLUGINS_DIR_ENV} points to a missing directory: {}",
-            dir.display()
-        );
-    }
-    Ok(BundledSource::None)
-}
-
-/// The core sync: read the package set under `plugins_dir`, compare it with
-/// the recorded marker, and install when anything changed or is missing.
-fn sync_from_directory(plugins_dir: &Path, dsh_home: &Path) -> Result<(), String> {
-    let packages = read_packages(plugins_dir)?;
-    let expected = expected_marker(&packages);
-
+    let plugins = read_config(&resource_dir.join(CONFIG_PATH))?;
     let profile_dir = dsh_home.join("profiles").join(PROFILE_NAME);
-    let node_modules = profile_dir.join("node_modules");
     let marker_path = profile_dir.join(MARKER_FILENAME);
+    let expected = expected_marker(&plugins);
 
-    let marker_matches = read_marker(&marker_path)
-        .map(|stored| stored == expected)
-        .unwrap_or(false);
-    let all_present = packages
-        .iter()
-        .all(|pkg| package_destination(&node_modules, &pkg.name).is_dir());
-    if marker_matches && all_present {
+    if read_json(&marker_path).as_ref() == Some(&expected)
+        && plugins
+            .iter()
+            .all(|plugin| installed_package_exists(&profile_dir, &plugin.name))
+    {
         return Ok(());
     }
 
-    let mut manifest = ensure_profile(&profile_dir)?;
-
-    for pkg in &packages {
-        install_package(pkg, &node_modules)?;
-        record_dependency(&mut manifest, pkg);
-        match &pkg.bundle_patch {
-            Some(patch) if !pkg.dir.join(patch).is_file() => {
-                log::warn!(
-                    "bundled plugin {} declares dsh.bundle.patch {} but the file is missing; \
-                     installed as a plain dependency, not enabled",
-                    pkg.name,
-                    patch.display()
-                );
-            }
-            Some(_) => enable_bundle(&mut manifest, &pkg.name),
-            None => log::warn!(
-                "bundled plugin {} declares no dsh.bundle.patch; \
-                 installed as a plain dependency, not enabled",
-                pkg.name
-            ),
-        }
+    for plugin in &plugins {
+        install_plugin(app, dsh_home, working_dir, entry, plugin).await?;
     }
 
-    write_json_file(&profile_dir.join("package.json"), &manifest)?;
-    write_json_file(&marker_path, &expected)?;
+    fs::create_dir_all(&profile_dir).map_err(|error| {
+        format!(
+            "无法创建插件 profile 目录 {}：{error}",
+            profile_dir.display()
+        )
+    })?;
+    write_json(&marker_path, &expected)?;
     log::info!(
-        "installed {} bundled plugin(s) into the {PROFILE_NAME} profile",
-        packages.len()
+        "installed {} configured plugin(s) into the {PROFILE_NAME} profile",
+        plugins.len()
     );
     Ok(())
 }
 
-/// Read every plugin package under `plugins_dir`, validating names, versions
-/// and bundle-patch declarations. Sorted by name for deterministic markers.
-fn read_packages(plugins_dir: &Path) -> Result<Vec<PluginPackage>, String> {
-    let entries = fs::read_dir(plugins_dir)
-        .map_err(|error| format!("无法读取插件目录 {}:{error}", plugins_dir.display()))?;
-    let mut packages = Vec::new();
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let manifest_path = dir.join("package.json");
-        if !manifest_path.is_file() {
-            continue;
-        }
-        let manifest = parse_json_file(&manifest_path)?;
-        let name = manifest
-            .get("name")
-            .and_then(Value::as_str)
-            .filter(|name| !name.is_empty())
-            .ok_or_else(|| format!("插件 {} 缺少有效的 name 字段", dir.display()))?;
-        validate_package_name(name)?;
-        if packages.iter().any(|pkg: &PluginPackage| pkg.name == name) {
-            return Err(format!("插件重名:{name}"));
-        }
-        let version = manifest
-            .get("version")
-            .and_then(Value::as_str)
-            .filter(|version| !version.is_empty())
-            .ok_or_else(|| format!("插件 {name} 缺少有效的 version 字段"))?;
-        let bundle_patch = manifest
-            .get("dsh")
-            .and_then(|dsh| dsh.get("bundle"))
-            .and_then(|bundle| bundle.get("patch"))
-            .and_then(Value::as_str)
-            .map(|patch| validate_patch_path(name, patch))
-            .transpose()?;
-        packages.push(PluginPackage {
-            name: name.to_owned(),
-            version: version.to_owned(),
-            dir,
-            bundle_patch,
-        });
-    }
-    packages.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(packages)
-}
+fn read_config(path: &Path) -> Result<Vec<PluginSpec>, String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|error| format!("无法读取插件配置 {}：{error}", path.display()))?;
+    let plugins: Vec<PluginSpec> = serde_json::from_str(&raw)
+        .map_err(|error| format!("插件配置 {} 不是有效 JSON：{error}", path.display()))?;
 
-/// Reject npm names that could escape the profile's `node_modules` or clash
-/// with our staging layout (dot-prefixed first segment).
-fn validate_package_name(name: &str) -> Result<(), String> {
-    for segment in name.split('/') {
-        if segment.is_empty()
-            || segment == "."
-            || segment == ".."
-            || segment.contains('\\')
-            || segment.starts_with('.')
+    for (index, plugin) in plugins.iter().enumerate() {
+        validate_package_name(&plugin.name)
+            .and_then(|_| plugin_command_args(plugin).map(|_| ()))
+            .map_err(|error| format!("插件配置第 {} 项无效：{error}", index + 1))?;
+        if plugins[..index]
+            .iter()
+            .any(|previous| previous.name == plugin.name)
         {
-            return Err(format!("插件名非法:{name}"));
+            return Err(format!("插件配置包含重复名称：{}", plugin.name));
         }
     }
-    Ok(())
+    Ok(plugins)
 }
 
-/// The bundle patch must stay inside the package: a relative, non-escaping path.
-fn validate_patch_path(name: &str, patch: &str) -> Result<PathBuf, String> {
-    let path = Path::new(patch);
-    if path.is_absolute()
-        || path.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
+fn validate_package_name(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name.trim() != name
+        || name.chars().any(char::is_whitespace)
+        || name.starts_with('-')
+        || name.contains('\\')
     {
+        return Err(format!("插件名非法：{name}"));
+    }
+
+    let valid = if let Some(scoped) = name.strip_prefix('@') {
+        let mut parts = scoped.split('/');
+        matches!((parts.next(), parts.next(), parts.next()), (Some(scope), Some(package), None) if valid_name_part(scope) && valid_name_part(package))
+    } else {
+        !name.contains('/') && valid_name_part(name)
+    };
+
+    if valid {
+        Ok(())
+    } else {
+        Err(format!("插件名非法：{name}"))
+    }
+}
+
+fn valid_name_part(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('.')
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
+}
+
+fn plugin_command_args(plugin: &PluginSpec) -> Result<Vec<String>, String> {
+    let tokens = plugin.command.split_whitespace().collect::<Vec<_>>();
+    let expected = [
+        "dsh",
+        "plugin",
+        "--profile",
+        PROFILE_NAME,
+        "add",
+        plugin.name.as_str(),
+    ];
+    if tokens != expected {
         return Err(format!(
-            "插件 {name} 的 dsh.bundle.patch 必须是包内相对路径:{patch}"
+            "插件 {} 的 command 必须为 `dsh plugin --profile {PROFILE_NAME} add {}`",
+            plugin.name, plugin.name
         ));
     }
-    Ok(path.to_path_buf())
+    Ok(tokens.into_iter().skip(1).map(str::to_owned).collect())
 }
 
-/// Create the profile directory and its missing files (mirroring the
-/// Harness's own `initProfile`), returning the existing or fresh manifest.
-fn ensure_profile(profile_dir: &Path) -> Result<Value, String> {
-    fs::create_dir_all(profile_dir)
-        .map_err(|error| format!("无法创建 profile 目录 {}:{error}", profile_dir.display()))?;
+async fn install_plugin(
+    app: &AppHandle,
+    dsh_home: &Path,
+    working_dir: &Path,
+    entry: &Path,
+    plugin: &PluginSpec,
+) -> Result<(), String> {
+    log::info!("installing configured Harness plugin {}", plugin.name);
+    let mut args = vec![entry.to_string_lossy().into_owned()];
+    args.extend(plugin_command_args(plugin)?);
+    let output = app
+        .shell()
+        .sidecar("node")
+        .map_err(|error| format!("无法定位内置 Node.js：{error}"))?
+        .args(args)
+        .env("DSH_HOME", dsh_home)
+        .current_dir(working_dir)
+        .output()
+        .await
+        .map_err(|error| format!("无法安装插件 {}：{error}", plugin.name))?;
 
-    let manifest_path = profile_dir.join("package.json");
-    let manifest = if manifest_path.is_file() {
-        parse_json_file(&manifest_path)?
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let detail = if !stderr.is_empty() { stderr } else { stdout };
+    let suffix = output.status.code().map_or_else(
+        || "进程异常终止".to_owned(),
+        |code| format!("退出码 {code}"),
+    );
+    if detail.is_empty() {
+        Err(format!("插件 {} 安装失败（{suffix}）", plugin.name))
     } else {
-        let manifest = json!({
-            "name": format!("dsh-profile-{PROFILE_NAME}"),
-            "private": true,
-            "dependencies": {},
-            "dsh": { "profile": { "bundles": WEB_PROFILE_BUNDLES } }
-        });
-        write_json_file(&manifest_path, &manifest)?;
-        manifest
-    };
-
-    let patch_path = profile_dir.join("cordis.patch.yml");
-    if !patch_path.is_file() {
-        fs::write(&patch_path, PROFILE_PATCH_TEMPLATE)
-            .map_err(|error| format!("无法创建 profile 补丁文件:{error}"))?;
+        Err(format!(
+            "插件 {} 安装失败（{suffix}）：{detail}",
+            plugin.name
+        ))
     }
-    let workspace_path = profile_dir.join("pnpm-workspace.yaml");
-    if !workspace_path.is_file() {
-        fs::write(&workspace_path, PROFILE_PNPM_WORKSPACE)
-            .map_err(|error| format!("无法创建 pnpm 工作区文件:{error}"))?;
-    }
-    Ok(manifest)
 }
 
-/// Copy one plugin package into the profile's `node_modules`, replacing any
-/// previous copy atomically (stage, then rename).
-fn install_package(pkg: &PluginPackage, node_modules: &Path) -> Result<(), String> {
-    let destination = package_destination(node_modules, &pkg.name);
-    let staging = package_destination(node_modules, &format!(".{}.staging", pkg.name));
-    if staging.exists() {
-        fs::remove_dir_all(&staging)
-            .map_err(|error| format!("无法清理插件暂存目录:{error}"))?;
-    }
-    if let Some(parent) = staging.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("无法创建插件目录 {}:{error}", parent.display()))?;
-    }
-    copy_dir(&pkg.dir, &staging)
-        .map_err(|error| format!("无法复制插件 {}:{error}", pkg.name))?;
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("无法创建插件目录 {}:{error}", parent.display()))?;
-    }
-    if destination.exists() {
-        fs::remove_dir_all(&destination)
-            .map_err(|error| format!("无法替换插件 {}:{error}", pkg.name))?;
-    }
-    fs::rename(&staging, &destination)
-        .map_err(|error| format!("无法启用插件 {}:{error}", pkg.name))?;
-    Ok(())
-}
-
-/// `node_modules/<name>` for an npm name, splitting scoped names into segments.
-fn package_destination(node_modules: &Path, name: &str) -> PathBuf {
+fn installed_package_exists(profile_dir: &Path, name: &str) -> bool {
     name.split('/')
-        .fold(node_modules.to_path_buf(), |path, segment| path.join(segment))
+        .fold(profile_dir.join("node_modules"), |path, segment| {
+            path.join(segment)
+        })
+        .join("package.json")
+        .is_file()
 }
 
-/// Recursive directory copy preserving files and (best-effort) symlinks.
-fn copy_dir(source: &Path, destination: &Path) -> Result<(), String> {
-    fs::create_dir_all(destination)
-        .map_err(|error| format!("无法创建目录 {}:{error}", destination.display()))?;
-    for entry in fs::read_dir(source)
-        .map_err(|error| format!("无法读取 {}:{error}", source.display()))?
-        .flatten()
-    {
-        let target = destination.join(entry.file_name());
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("无法读取条目类型:{error}"))?;
-        if file_type.is_dir() {
-            copy_dir(&entry.path(), &target)?;
-        } else if file_type.is_file() {
-            fs::copy(entry.path(), &target)
-                .map_err(|error| format!("无法复制 {}:{error}", entry.path().display()))?;
-        } else if file_type.is_symlink() {
-            let link = fs::read_link(entry.path())
-                .map_err(|error| format!("无法读取符号链接 {}:{error}", entry.path().display()))?;
-            #[cfg(windows)]
-            std::os::windows::fs::symlink_dir(&link, &target)
-                .or_else(|_| std::os::windows::fs::symlink_file(&link, &target))
-                .map_err(|error| format!("无法创建符号链接 {}:{error}", target.display()))?;
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&link, &target)
-                .map_err(|error| format!("无法创建符号链接 {}:{error}", target.display()))?;
-        }
-    }
-    Ok(())
+fn expected_marker(plugins: &[PluginSpec]) -> Value {
+    json!({ "plugins": plugins })
 }
 
-/// Record the package as a profile dependency. The bundled set is
-/// authoritative, so a version change overwrites the recorded version.
-fn record_dependency(manifest: &mut Value, pkg: &PluginPackage) {
-    let Some(object) = manifest.as_object_mut() else {
-        log::warn!("profile 清单不是对象，跳过依赖记录");
-        return;
-    };
-    match object.get_mut("dependencies") {
-        None => {
-            object.insert(
-                "dependencies".into(),
-                json!({ pkg.name.clone(): pkg.version.clone() }),
-            );
-        }
-        Some(Value::Object(map)) => {
-            map.insert(pkg.name.clone(), Value::String(pkg.version.clone()));
-        }
-        Some(_) => log::warn!(
-            "profile 的 dependencies 不是对象，未记录插件 {}",
-            pkg.name
-        ),
-    }
+fn read_json(path: &Path) -> Option<Value> {
+    serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
 }
 
-/// Append the plugin to `dsh.profile.bundles` so its patch layer is enabled.
-fn enable_bundle(manifest: &mut Value, name: &str) {
-    let Some(object) = manifest.as_object_mut() else {
-        return;
-    };
-    let bundles = object
-        .get_mut("dsh")
-        .and_then(|dsh| dsh.as_object_mut())
-        .and_then(|dsh| dsh.get_mut("profile"))
-        .and_then(|profile| profile.as_object_mut())
-        .and_then(|profile| profile.get_mut("bundles"));
-    match bundles {
-        Some(Value::Array(list)) => {
-            if !list.iter().any(|item| item.as_str() == Some(name)) {
-                list.push(Value::String(name.into()));
-            }
-        }
-        _ => log::warn!(
-            "profile 的 dsh.profile.bundles 缺失或不是数组，无法启用插件 {}",
-            name
-        ),
-    }
-}
-
-/// The marker value for a package set: `{ "plugins": { name: version, ... } }`.
-fn expected_marker(packages: &[PluginPackage]) -> Value {
-    let mut plugins = Map::new();
-    for pkg in packages {
-        plugins.insert(pkg.name.clone(), Value::String(pkg.version.clone()));
-    }
-    json!({ "plugins": Value::Object(plugins) })
-}
-
-fn read_marker(path: &Path) -> Option<Value> {
-    let raw = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&raw).ok()
-}
-
-fn parse_json_file(path: &Path) -> Result<Value, String> {
-    let raw = fs::read_to_string(path)
-        .map_err(|error| format!("无法读取 {}:{error}", path.display()))?;
-    serde_json::from_str(&raw).map_err(|error| format!("{} 不是有效 JSON:{error}", path.display()))
-}
-
-fn write_json_file(path: &Path, value: &Value) -> Result<(), String> {
+fn write_json(path: &Path, value: &Value) -> Result<(), String> {
     let raw = serde_json::to_string_pretty(value)
-        .map_err(|error| format!("无法序列化 {}:{error}", path.display()))?;
+        .map_err(|error| format!("无法序列化插件安装标记：{error}"))?;
     fs::write(path, format!("{raw}\n"))
-        .map_err(|error| format!("无法写入 {}:{error}", path.display()))
+        .map_err(|error| format!("无法写入插件安装标记 {}：{error}", path.display()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn write(path: &Path, content: &str) {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(path, content).unwrap();
-    }
-
-    fn sample_plugin(dir: &Path, name: &str, version: &str, with_bundle: bool) {
-        let bundle = if with_bundle {
-            r#","dsh": {"bundle": {"patch": "./cordis.patch.yml"}}"#
-        } else {
-            ""
-        };
-        write(
-            &dir.join("package.json"),
-            &format!(r#"{{"name":"{name}","version":"{version}"{bundle}}}"#),
-        );
-        if with_bundle {
-            write(
-                &dir.join("cordis.patch.yml"),
-                "# bundled plugin layer\n- id: demo\n  config: {}\n",
-            );
-        }
-        write(&dir.join("lib.js"), "export default {}\n");
-    }
+    use std::path::PathBuf;
 
     fn temp_dir(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("dsh-desktop-plugins-{label}-{}", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "dsh-desktop-plugin-config-{label}-{}",
+            std::process::id()
+        ))
     }
 
     #[test]
-    fn validates_package_names() {
-        assert!(validate_package_name("demo-plugin").is_ok());
-        assert!(validate_package_name("@scope/name").is_ok());
-        assert!(validate_package_name("").is_err());
-        assert!(validate_package_name("..").is_err());
-        assert!(validate_package_name("a/../b").is_err());
-        assert!(validate_package_name("a\\b").is_err());
-        assert!(validate_package_name(".hidden").is_err());
-    }
-
-    #[test]
-    fn validates_patch_paths() {
-        assert!(validate_patch_path("p", "./cordis.patch.yml").is_ok());
-        assert!(validate_patch_path("p", "cordis.patch.yml").is_ok());
-        // Absolute paths are rejected on every platform: POSIX paths carry a
-        // RootDir component (and Windows drive paths like `C:\abs.yml` are
-        // additionally caught by is_absolute).
-        assert!(validate_patch_path("p", "/abs/path.yml").is_err());
-        assert!(validate_patch_path("p", "../escape.yml").is_err());
-    }
-
-    #[test]
-    fn installs_scoped_packages_into_nested_node_modules() {
-        let temp = temp_dir("scoped");
+    fn reads_valid_plugin_config() {
+        let temp = temp_dir("valid");
         let _ = fs::remove_dir_all(&temp);
-        let plugins = temp.join("plugins");
-        fs::create_dir_all(&plugins).unwrap();
-        sample_plugin(
-            &plugins.join("deepseek-usage-plugin"),
-            "@deepseek-ai/dsh-plugin-deepseek-usage",
-            "0.1.0",
-            true,
-        );
-        let dsh_home = temp.join("harness");
+        fs::create_dir_all(&temp).unwrap();
+        let path = temp.join("plugins.json");
+        fs::write(
+            &path,
+            r#"[
+                {"name":"plain-plugin","command":"dsh plugin --profile web add plain-plugin"},
+                {"name":"@scope/scoped-plugin","command":"dsh plugin --profile web add @scope/scoped-plugin"}
+            ]"#,
+        )
+        .unwrap();
 
-        sync_from_directory(&plugins, &dsh_home).expect("sync should succeed");
-
-        let profile = dsh_home.join("profiles").join("web");
-        assert!(profile
-            .join("node_modules/@deepseek-ai/dsh-plugin-deepseek-usage/package.json")
-            .is_file());
-        assert!(profile
-            .join("node_modules/@deepseek-ai/dsh-plugin-deepseek-usage/cordis.patch.yml")
-            .is_file());
-        let manifest: Value =
-            serde_json::from_str(&fs::read_to_string(profile.join("package.json")).unwrap())
-                .unwrap();
-        assert_eq!(
-            manifest["dependencies"]["@deepseek-ai/dsh-plugin-deepseek-usage"],
-            "0.1.0"
-        );
-        let bundles = manifest["dsh"]["profile"]["bundles"].as_array().unwrap();
-        assert!(bundles
-            .iter()
-            .any(|bundle| bundle == "@deepseek-ai/dsh-plugin-deepseek-usage"));
-
+        let plugins = read_config(&path).unwrap();
+        assert_eq!(plugins.len(), 2);
+        assert_eq!(plugins[1].name, "@scope/scoped-plugin");
         fs::remove_dir_all(&temp).unwrap();
     }
 
     #[test]
-    fn installs_bundled_plugins_into_web_profile() {
-        let temp = temp_dir("sync");
+    fn rejects_invalid_or_duplicate_names() {
+        for name in ["", "../escape", "plugin name", "-option", "@scope"] {
+            assert!(validate_package_name(name).is_err(), "accepted {name}");
+        }
+        assert!(validate_package_name("dsh-plugin").is_ok());
+        assert!(validate_package_name("@deepseek-ai/dsh-plugin").is_ok());
+
+        let temp = temp_dir("duplicate");
         let _ = fs::remove_dir_all(&temp);
-        let plugins = temp.join("plugins");
-        fs::create_dir_all(&plugins).unwrap();
-        sample_plugin(&plugins.join("demo-plugin"), "demo-plugin", "1.0.0", true);
-        sample_plugin(&plugins.join("plain-lib"), "plain-lib", "2.1.0", false);
-        let dsh_home = temp.join("harness");
+        fs::create_dir_all(&temp).unwrap();
+        let path = temp.join("plugins.json");
+        fs::write(
+            &path,
+            r#"[
+                {"name":"same","command":"dsh plugin --profile web add same"},
+                {"name":"same","command":"dsh plugin --profile web add same"}
+            ]"#,
+        )
+        .unwrap();
+        assert!(read_config(&path).unwrap_err().contains("重复"));
 
-        sync_from_directory(&plugins, &dsh_home).expect("sync should succeed");
-
-        let profile = dsh_home.join("profiles").join("web");
-        let manifest: Value =
-            serde_json::from_str(&fs::read_to_string(profile.join("package.json")).unwrap())
-                .unwrap();
-        assert_eq!(manifest["dependencies"]["demo-plugin"], "1.0.0");
-        assert_eq!(manifest["dependencies"]["plain-lib"], "2.1.0");
-        let bundles = manifest["dsh"]["profile"]["bundles"].as_array().unwrap();
-        assert!(bundles.iter().any(|bundle| bundle == "demo-plugin"));
-        assert!(!bundles.iter().any(|bundle| bundle == "plain-lib"));
-        assert!(profile
-            .join("node_modules/demo-plugin/cordis.patch.yml")
-            .is_file());
-        assert!(profile.join("node_modules/plain-lib/lib.js").is_file());
-        assert!(profile.join(MARKER_FILENAME).is_file());
-
-        // Idempotent: a second sync keeps the marker byte-identical.
-        let before = fs::read_to_string(profile.join(MARKER_FILENAME)).unwrap();
-        sync_from_directory(&plugins, &dsh_home).expect("second sync should be a no-op");
-        assert_eq!(
-            fs::read_to_string(profile.join(MARKER_FILENAME)).unwrap(),
-            before
-        );
-
-        // A version bump triggers a re-sync that updates the dependency.
-        sample_plugin(&plugins.join("demo-plugin"), "demo-plugin", "1.1.0", true);
-        sync_from_directory(&plugins, &dsh_home).expect("bumped sync should succeed");
-        let manifest: Value =
-            serde_json::from_str(&fs::read_to_string(profile.join("package.json")).unwrap())
-                .unwrap();
-        assert_eq!(manifest["dependencies"]["demo-plugin"], "1.1.0");
-        let marker: Value =
-            serde_json::from_str(&fs::read_to_string(profile.join(MARKER_FILENAME)).unwrap())
-                .unwrap();
-        assert_eq!(marker["plugins"]["demo-plugin"], "1.1.0");
-
-        // Self-healing: a deleted package directory is restored on the next sync.
-        fs::remove_dir_all(profile.join("node_modules/demo-plugin")).unwrap();
-        sync_from_directory(&plugins, &dsh_home).expect("healing sync should succeed");
-        assert!(profile
-            .join("node_modules/demo-plugin/package.json")
-            .is_file());
-
+        fs::write(
+            &path,
+            r#"[{"name":"safe","command":"dsh plugin --profile web add other"}]"#,
+        )
+        .unwrap();
+        assert!(read_config(&path).unwrap_err().contains("command"));
         fs::remove_dir_all(&temp).unwrap();
     }
 
     #[test]
-    fn preserves_existing_profile_manifest() {
-        let temp = temp_dir("preserve");
+    fn detects_missing_installed_package() {
+        let temp = temp_dir("installed");
         let _ = fs::remove_dir_all(&temp);
-        let plugins = temp.join("plugins");
-        fs::create_dir_all(&plugins).unwrap();
-        sample_plugin(&plugins.join("extra"), "extra", "3.0.0", true);
+        let package = temp.join("node_modules/@scope/plugin/package.json");
+        fs::create_dir_all(package.parent().unwrap()).unwrap();
+        fs::write(&package, "{}").unwrap();
 
-        let dsh_home = temp.join("harness");
-        let profile = dsh_home.join("profiles").join("web");
-        write(
-            &profile.join("package.json"),
-            r#"{
-  "name": "dsh-profile-web",
-  "private": true,
-  "dependencies": { "user-dep": "9.9.9" },
-  "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "user-bundle"] } }
-}
-"#,
-        );
-        write(&profile.join("cordis.patch.yml"), "- id: mine\n  config: {}\n");
-
-        sync_from_directory(&plugins, &dsh_home).expect("sync should succeed");
-
-        let manifest: Value =
-            serde_json::from_str(&fs::read_to_string(profile.join("package.json")).unwrap())
-                .unwrap();
-        assert_eq!(manifest["dependencies"]["user-dep"], "9.9.9");
-        assert_eq!(manifest["dependencies"]["extra"], "3.0.0");
-        let bundles = manifest["dsh"]["profile"]["bundles"].as_array().unwrap();
-        let names: Vec<&str> = bundles.iter().filter_map(Value::as_str).collect();
-        assert_eq!(
-            names,
-            vec![
-                "@deepseek-ai/dsh-base",
-                "@deepseek-ai/dsh-web-app",
-                "user-bundle",
-                "extra"
-            ]
-        );
-        // The user's own patch layer is untouched.
-        assert_eq!(
-            fs::read_to_string(profile.join("cordis.patch.yml")).unwrap(),
-            "- id: mine\n  config: {}\n"
-        );
-
+        assert!(installed_package_exists(&temp, "@scope/plugin"));
+        assert!(!installed_package_exists(&temp, "missing"));
         fs::remove_dir_all(&temp).unwrap();
-    }
-
-    #[test]
-    fn rejects_duplicate_plugin_names() {
-        let temp = temp_dir("dupe");
-        let _ = fs::remove_dir_all(&temp);
-        let plugins = temp.join("plugins");
-        sample_plugin(&plugins.join("one"), "same", "1.0.0", true);
-        sample_plugin(&plugins.join("two"), "same", "2.0.0", true);
-        let error = sync_from_directory(&plugins, &temp.join("harness")).unwrap_err();
-        assert!(error.contains("重名"), "unexpected error: {error}");
-        fs::remove_dir_all(&temp).unwrap();
-    }
-
-    #[test]
-    fn syncs_from_bundled_archive() {
-        let temp = temp_dir("archive");
-        let _ = fs::remove_dir_all(&temp);
-        let plugins = temp.join("plugins");
-        fs::create_dir_all(&plugins).unwrap();
-        sample_plugin(&plugins.join("demo-plugin"), "demo-plugin", "1.0.0", true);
-
-        let archive_path = temp.join("runtime").join(BUNDLED_ARCHIVE_NAME);
-        fs::create_dir_all(archive_path.parent().unwrap()).unwrap();
-        let archive = fs::File::create(&archive_path).unwrap();
-        let encoder = flate2::write::GzEncoder::new(archive, flate2::Compression::default());
-        let mut builder = tar::Builder::new(encoder);
-        builder
-            .append_dir_all("demo-plugin", plugins.join("demo-plugin"))
-            .unwrap();
-        let encoder = builder.into_inner().unwrap();
-        encoder.finish().unwrap();
-
-        let dsh_home = temp.join("harness");
-        sync_bundled_plugins(&temp, &temp, &dsh_home).expect("archive sync should succeed");
-        assert!(dsh_home
-            .join("profiles/web/node_modules/demo-plugin/package.json")
-            .is_file());
-        // The extraction staging directory is cleaned up.
-        assert!(!temp.join("plugins-bundled").exists());
-
-        // Idempotent across launches while the marker matches.
-        sync_bundled_plugins(&temp, &temp, &dsh_home).expect("second sync should be a no-op");
-        assert!(!temp.join("plugins-bundled").exists());
-
-        fs::remove_dir_all(&temp).unwrap();
-    }
-
-    #[test]
-    fn missing_source_is_a_no_op() {
-        let temp = temp_dir("none");
-        let _ = fs::remove_dir_all(&temp);
-        sync_bundled_plugins(&temp, &temp, &temp.join("harness")).expect("no source should be fine");
-        assert!(!temp.join("harness").exists());
-        let _ = fs::remove_dir_all(&temp);
     }
 }

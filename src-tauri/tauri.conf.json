@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DSH",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "identifier": "dshdesktop",
   "build": {
     "beforeDevCommand": "pnpm vite",
@@ -43,7 +43,7 @@
     "resources": [
       "runtime/dsh-runtime.tar.gz",
       "runtime/runtime-manifest.json",
-      "runtime/plugins.tar.gz"
+      "plugins/plugins.json"
     ],
     "icon": [
       "icons/32x32.png",
