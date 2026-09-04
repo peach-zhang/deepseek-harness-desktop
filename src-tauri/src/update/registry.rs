@@ -6,6 +6,7 @@ use semver::Version;
 use serde_json::Value;
 
 const DEFAULT_REGISTRY: &str = "https://registry.npmmirror.com";
+const OFFICIAL_REGISTRY: &str = "https://registry.npmjs.org";
 const REGISTRY_ENV: &str = "DSH_DESKTOP_REGISTRY";
 const DISABLE_ENV: &str = "DSH_DESKTOP_UPDATE_DISABLED";
 pub(crate) const DSH_METADATA_PATH: &str = "@deepseek-ai%2Fdsh";
@@ -24,6 +25,21 @@ pub(crate) fn registry_base() -> String {
         .map(|value| value.trim().trim_end_matches('/').to_owned())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| DEFAULT_REGISTRY.to_owned())
+}
+
+/// Registry order for update checks and installs. The configured registry stays
+/// first, while the canonical npm registry covers inconsistent mirror metadata
+/// and failed installs.
+pub(crate) fn registry_candidates() -> Vec<String> {
+    registries_with_official_fallback(registry_base())
+}
+
+fn registries_with_official_fallback(primary: String) -> Vec<String> {
+    if primary.eq_ignore_ascii_case(OFFICIAL_REGISTRY) {
+        vec![primary]
+    } else {
+        vec![primary, OFFICIAL_REGISTRY.to_owned()]
+    }
 }
 
 pub(crate) fn http_agent(timeout: Duration) -> ureq::Agent {
@@ -50,25 +66,24 @@ pub(crate) fn fetch_json(agent: &ureq::Agent, url: &str) -> Result<Value, String
 }
 
 /// The version we track: the publisher's `latest` dist-tag, falling back to
-/// the highest published version when the tag is absent or unparseable.
+/// the highest published version when the tag is absent or unparseable. A
+/// valid tag must also exist in `versions`; mirrors can expose a new dist-tag
+/// before the corresponding package metadata has finished syncing.
 pub(crate) fn latest_candidate(metadata: &Value) -> Option<Version> {
-    let tagged = metadata
+    let versions = metadata.get("versions").and_then(Value::as_object)?;
+    if let Some(tagged) = metadata
         .get("dist-tags")
         .and_then(|tags| tags.get("latest"))
         .and_then(Value::as_str)
-        .and_then(|version| Version::parse(version).ok());
-    if tagged.is_some() {
-        return tagged;
+    {
+        if let Ok(version) = Version::parse(tagged) {
+            return versions.contains_key(tagged).then_some(version);
+        }
     }
-    metadata
-        .get("versions")
-        .and_then(Value::as_object)
-        .and_then(|versions| {
-            versions
-                .keys()
-                .filter_map(|key| Version::parse(key).ok())
-                .max()
-        })
+    versions
+        .keys()
+        .filter_map(|key| Version::parse(key).ok())
+        .max()
 }
 
 #[cfg(test)]
@@ -100,6 +115,15 @@ mod tests {
     }
 
     #[test]
+    fn rejects_latest_tag_before_version_metadata_is_synced() {
+        let metadata = json!({
+            "dist-tags": { "latest": "0.1.2-rc.1" },
+            "versions": { "0.1.1-rc.2": {} }
+        });
+        assert_eq!(latest_candidate(&metadata), None);
+    }
+
+    #[test]
     fn stable_release_outranks_prerelease() {
         let metadata = json!({
             "versions": { "0.1.0-rc.7": {}, "0.1.0": {} }
@@ -110,5 +134,17 @@ mod tests {
         );
         assert!(Version::parse("0.1.0").unwrap() > Version::parse("0.1.0-rc.7").unwrap());
         assert!(Version::parse("0.1.0-rc.8").unwrap() > Version::parse("0.1.0-rc.7").unwrap());
+    }
+
+    #[test]
+    fn appends_official_registry_as_fallback_without_duplicates() {
+        assert_eq!(
+            registries_with_official_fallback(DEFAULT_REGISTRY.to_owned()),
+            vec![DEFAULT_REGISTRY.to_owned(), OFFICIAL_REGISTRY.to_owned()]
+        );
+        assert_eq!(
+            registries_with_official_fallback(OFFICIAL_REGISTRY.to_owned()),
+            vec![OFFICIAL_REGISTRY.to_owned()]
+        );
     }
 }

@@ -14,7 +14,7 @@ Harness 及其 Web UI 均已内置，无需安装 Node.js，也不需要手动�
 
 ## 下载
 
-**当前版本：[DSH Desktop v0.1.11](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.11)**
+**当前版本：[DSH Desktop v0.1.12](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.12)**
 
 Windows x64 和 macOS 安装包统一从
 [最新版下载页面](https://github.com/peach-zhang/deepseek-harness-desktop/releases/latest)
@@ -50,13 +50,13 @@ DSH Desktop 启动后会在随机的 `127.0.0.1` 本地端口运行 Harness 服�
 更新失败（例如断网）不会阻止启动——应用会回退到安装包内置的运行时。安装过程使用
 `--ignore-scripts`，与内置运行时的构建方式一致，不会执行任何第三方安装脚本。
 
-默认使用国内镜像 `https://registry.npmmirror.com`（内容与官方源逐字节一致，
-仅同步略有延迟）。可用的环境变量：
+首选国内镜像 `https://registry.npmmirror.com`。如果镜像返回不一致的元数据，或安装失败，
+更新器会自动改用官方 `https://registry.npmjs.org` registry 重试。可用的环境变量：
 
 | 变量 | 作用 |
 | --- | --- |
 | `DSH_DESKTOP_UPDATE_DISABLED=1` | 完全跳过启动时的更新检查 |
-| `DSH_DESKTOP_REGISTRY=<url>` | 改用其他 registry，例如官方源 `https://registry.npmjs.org` |
+| `DSH_DESKTOP_REGISTRY=<url>` | 改用其他首选 registry；官方源仍作为后备 |
 
 ## Harness 插件
 
@@ -101,8 +101,8 @@ pnpm build:desktop
 3. 创建并推送相同版本的标签，例如：
 
 ```bash
-git tag v0.1.11
-git push origin v0.1.11
+git tag v0.1.12
+git push origin v0.1.12
 ```
 
 GitHub Actions 会在官方托管的原生运行器上构建以下目标：

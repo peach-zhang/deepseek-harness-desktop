@@ -19,9 +19,11 @@
 //!
 //! Environment overrides:
 //! - `DSH_DESKTOP_UPDATE_DISABLED=1`  skip the update check entirely
-//! - `DSH_DESKTOP_REGISTRY=<url>`     use another registry instead of the
-//!   default npmmirror.com mirror (for example the official
-//!   https://registry.npmjs.org)
+//! - `DSH_DESKTOP_REGISTRY=<url>`     use another registry as the primary
+//!   source instead of the default npmmirror.com mirror
+//!
+//! The official npm registry is automatically tried after a primary registry
+//! failure so a temporary mirror sync gap does not strand runtime updates.
 
 use std::{fs, path::Path};
 
@@ -35,7 +37,7 @@ use semver::Version;
 use crate::runtime::ensure_harness_runtime;
 use install::runtime_paths;
 use registry::{
-    fetch_json, http_agent, latest_candidate, registry_base, updates_disabled, CHECK_TIMEOUT,
+    fetch_json, http_agent, latest_candidate, registry_candidates, updates_disabled, CHECK_TIMEOUT,
     DSH_METADATA_PATH,
 };
 
@@ -164,15 +166,26 @@ pub(crate) fn select_harness_runtime(
         target: current.version.clone(),
     });
 
-    let registry = registry_base();
+    let registries = registry_candidates();
     let check_agent = http_agent(CHECK_TIMEOUT);
-    let metadata_url = format!("{registry}/{DSH_METADATA_PATH}");
-    let candidate = match fetch_json(&check_agent, &metadata_url) {
-        Ok(metadata) => latest_candidate(&metadata),
-        Err(error) => {
-            log::warn!("Harness update check failed: {error}");
-            return Ok(current);
+    let mut candidate = None;
+    for (index, registry) in registries.iter().enumerate() {
+        let metadata_url = format!("{registry}/{DSH_METADATA_PATH}");
+        match fetch_json(&check_agent, &metadata_url) {
+            Ok(metadata) => {
+                if let Some(version) = latest_candidate(&metadata) {
+                    candidate = Some((index, version));
+                    break;
+                }
+                log::warn!("Harness update metadata from {registry} contains no valid version");
+            }
+            Err(error) => log::warn!("Harness update check via {registry} failed: {error}"),
         }
+    }
+
+    let Some((registry_index, candidate)) = candidate else {
+        log::warn!("Harness update check failed via every configured registry");
+        return Ok(current);
     };
 
     let Ok(current_version) = Version::parse(&current.version) else {
@@ -182,10 +195,11 @@ pub(crate) fn select_harness_runtime(
         );
         return Ok(current);
     };
-    let Some(target) = candidate.filter(|target| *target > current_version) else {
+    if candidate <= current_version {
         log::info!("Harness {} is up to date.", current.version);
         return Ok(current);
-    };
+    }
+    let target = candidate;
     if failed_runtime(data_dir).as_deref() == Some(target.to_string().as_str()) {
         log::warn!("Harness {target} is quarantined after a previous startup failure");
         return Ok(current);
@@ -195,17 +209,28 @@ pub(crate) fn select_harness_runtime(
         target: target.to_string(),
     });
 
-    let download_agent = http_agent(install::DOWNLOAD_TIMEOUT);
-    let updated = node_sidecar_path().and_then(|node| {
-        install::install_updated_runtime(
-            &node,
-            data_dir,
-            &registry,
-            &download_agent,
-            &target,
-            notify,
-        )
-    });
+    let updated = (|| -> Result<RuntimeSelection, String> {
+        let node = node_sidecar_path()?;
+        let mut failures = Vec::new();
+        for registry in &registries[registry_index..] {
+            let download_agent = http_agent(install::DOWNLOAD_TIMEOUT);
+            match install::install_updated_runtime(
+                &node,
+                data_dir,
+                registry,
+                &download_agent,
+                &target,
+                notify,
+            ) {
+                Ok(selection) => return Ok(selection),
+                Err(error) => {
+                    log::warn!("Harness update via {registry} failed: {error}");
+                    failures.push(format!("{registry}: {error}"));
+                }
+            }
+        }
+        Err(format!("所有更新源均失败：{}", failures.join("；")))
+    })();
     match updated {
         Ok(selection) => {
             log::info!("Harness updated to {}.", selection.version);
@@ -368,7 +393,10 @@ mod tests {
         let _ = fs::remove_dir_all(&data_dir);
         fs::create_dir_all(&data_dir).expect("test data dir should be creatable");
 
-        let registry = registry_base();
+        let registry = registry_candidates()
+            .into_iter()
+            .next()
+            .expect("at least one registry should be configured");
         let agent = http_agent(install::DOWNLOAD_TIMEOUT);
         let cli = install::ensure_npm_cli(&data_dir, &registry, &agent)
             .expect("npm CLI should bootstrap");

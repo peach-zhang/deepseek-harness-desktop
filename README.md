@@ -14,7 +14,7 @@ install Node.js or run `npx @deepseek-ai/dsh web`.
 
 ## Download
 
-**Current release: [DSH Desktop v0.1.11](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.11)**
+**Current release: [DSH Desktop v0.1.12](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.12)**
 
 Windows x64 and macOS installers are available from the
 [Latest Release](https://github.com/peach-zhang/deepseek-harness-desktop/releases/latest)
@@ -59,14 +59,15 @@ falls back to the runtime bundled in the installer. Installs run with
 `--ignore-scripts`, matching how the bundled runtime is built, so no
 third-party lifecycle scripts are executed.
 
-The default registry is the `https://registry.npmmirror.com` mirror, which
-serves byte-identical packages (only syncs slightly behind the official
-registry). Environment overrides:
+The primary registry is the `https://registry.npmmirror.com` mirror. If it
+returns inconsistent metadata or an install fails, the updater automatically
+retries through the official `https://registry.npmjs.org` registry. Environment
+overrides:
 
 | Variable | Effect |
 | --- | --- |
 | `DSH_DESKTOP_UPDATE_DISABLED=1` | Skip the startup update check entirely |
-| `DSH_DESKTOP_REGISTRY=<url>` | Use another registry, for example the official `https://registry.npmjs.org` |
+| `DSH_DESKTOP_REGISTRY=<url>` | Use another primary registry; the official registry remains the fallback |
 
 ## Harness plugins
 
@@ -113,8 +114,8 @@ committed.
 3. Commit and push a matching tag, for example:
 
 ```bash
-git tag v0.1.11
-git push origin v0.1.11
+git tag v0.1.12
+git push origin v0.1.12
 ```
 
 The release workflow builds these targets on native GitHub-hosted runners:
