@@ -1,7 +1,7 @@
 //! Tauri application builder — setup, window creation, and run loop.
 
 use tauri::{Manager, RunEvent};
-use tauri::webview::{DownloadEvent, WebviewWindowBuilder};
+use tauri::webview::{DownloadEvent, PageLoadEvent, WebviewWindowBuilder};
 
 use crate::backend::{self, BackendManager};
 use crate::commands;
@@ -23,7 +23,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
@@ -35,14 +35,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             backend::commands::backend_status,
             backend::commands::restart_backend,
-            backend::commands::prepare_for_update,
             commands::get_desktop_info,
-            commands::set_update_check_time,
             theme::get_harness_theme,
         ])
         .setup(move |app| {
             // Manually create the main window with a download handler so files
-            // saved from the Harness iframe automatically reveal in Explorer /
+            // saved from the Harness page automatically reveal in Explorer /
             // Finder. The window is marked `"create": false` in tauri.conf.json
             // to prevent Tauri from building it before this handler is attached.
             let window_config = app
@@ -51,28 +49,44 @@ pub fn run() {
                 .windows
                 .first()
                 .ok_or_else(|| "主窗口配置缺失".to_owned())?;
-            let _webview_window =
-                WebviewWindowBuilder::from_config(app.handle(), window_config)?
-                    .on_download(|_webview, event| match event {
-                        DownloadEvent::Requested { .. } => {
-                            // Allow the download to proceed with its default path.
-                            true
-                        }
-                        DownloadEvent::Finished {
-                            url: _,
-                            path,
-                            success,
-                        } => {
-                            if let Some(file_path) = path {
-                                if success {
-                                    open_containing_folder(&file_path);
-                                }
+            let navigation_manager = manager_for_setup.clone();
+            let page_load_manager = manager_for_setup.clone();
+            let page_load_app = app.handle().clone();
+            let webview_window = WebviewWindowBuilder::from_config(app.handle(), window_config)?
+                .on_navigation(move |url| navigation_manager.allows_navigation(url))
+                .on_page_load(move |window, payload| {
+                    page_load_manager.capture_bootstrap_url(payload.url());
+                    if matches!(payload.event(), PageLoadEvent::Finished) {
+                        page_load_manager.handle_page_load(
+                            &page_load_app,
+                            &window,
+                            payload.url(),
+                        );
+                    }
+                })
+                .on_download(|_webview, event| match event {
+                    DownloadEvent::Requested { .. } => {
+                        // Allow the download to proceed with its default path.
+                        true
+                    }
+                    DownloadEvent::Finished {
+                        url: _,
+                        path,
+                        success,
+                    } => {
+                        if let Some(file_path) = path {
+                            if success {
+                                open_containing_folder(&file_path);
                             }
-                            true
                         }
-                        _ => true,
-                    })
-                    .build()?;
+                        true
+                    }
+                    _ => true,
+                })
+                .build()?;
+            if let Ok(url) = webview_window.url() {
+                manager_for_setup.capture_bootstrap_url(&url);
+            }
 
             // Initialize SQLite database
             let data_dir = app
@@ -87,8 +101,15 @@ pub fn run() {
             }
             app.manage(db);
 
+            // Desktop update checks and prompts live in Rust because the local
+            // bootstrap document is replaced by the authenticated Harness page.
+            crate::desktop_update::spawn_update_checks(
+                app.handle().clone(),
+                manager_for_setup.clone(),
+            );
+
             // Watch the Harness settings file and forward theme changes so the
-            // custom titlebar can match the iframe's appearance.
+            // bootstrap titlebar matches the configured Harness appearance.
             theme::spawn_theme_watcher(app.handle().clone());
 
             #[cfg(target_os = "macos")]
@@ -146,6 +167,7 @@ pub fn run() {
                         let status = backend::BackendStatus::failed(error, &version);
                         backend.set_status(status.clone()).await;
                         backend::emit_status(&handle, status);
+                        backend.restore_bootstrap(&handle);
                     }
                 }
             });

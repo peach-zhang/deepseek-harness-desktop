@@ -11,24 +11,6 @@ export interface UpdateProgress {
   states: Array<'done' | 'active' | 'pending'>
 }
 
-export function parseHarnessUrl(value: string): URL | null {
-  try {
-    const parsed = new URL(value)
-    if (
-      parsed.protocol !== 'http:' ||
-      parsed.hostname !== '127.0.0.1' ||
-      parsed.port === '' ||
-      parsed.username !== '' ||
-      parsed.password !== ''
-    ) {
-      return null
-    }
-    return parsed
-  } catch {
-    return null
-  }
-}
-
 export function escapeHtml(value: string): string {
   return value
     .replaceAll('&', '&amp;')

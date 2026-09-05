@@ -2,9 +2,9 @@
 
 ## Supported versions
 
-Only the latest GitHub Release is supported. DeepSeek Harness is currently a
-developer preview, so this wrapper pins one reviewed Harness version per
-release instead of silently updating it at runtime.
+Only the latest GitHub Release is supported. The installer includes a reviewed
+Harness fallback, while the desktop supervisor can install a newer signed npm
+runtime and quarantine it automatically if startup fails.
 
 ## Reporting a vulnerability
 
@@ -16,7 +16,11 @@ or an unpatched exploit.
 
 - The Harness server binds only to `127.0.0.1` on an operating-system-selected
   port.
-- Only a validated loopback readiness URL is loaded.
+- Only a validated loopback readiness URL is loaded as the top-level document,
+  allowing DSH to exchange its launch token for a first-party session cookie.
+- The launch token is never sent through frontend IPC and is redacted from logs.
+- Navigation is restricted to the bundled bootstrap origin and the active
+  Harness `127.0.0.1:<port>` origin.
 - The remote Harness origin is not granted Tauri IPC permissions.
 - Harness and model data live under the operating system's per-user app-data
   directory.
@@ -39,5 +43,6 @@ The CSP configured in `src-tauri/tauri.conf.json` restricts resource loading:
   this directive could be removed after testing.
 - **`script-src 'self'`**: Only allow scripts from the app itself (no external
   or inline scripts).
-- **`frame-src http://127.0.0.1:*`**: Allow iframes from the local Harness
-  server (bound to loopback on a random port).
+
+The Harness UI replaces the bootstrap as a top-level document, so the local
+bootstrap CSP does not grant iframe access to loopback services.

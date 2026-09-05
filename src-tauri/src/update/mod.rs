@@ -54,9 +54,8 @@ pub(crate) use install::{UpdateStage, UPDATE_STAGE_TOTAL};
 /// usually enough to let the competing handle drain.
 ///
 /// On the first sharing-violation failure we also attempt to kill any orphaned
-/// `node.exe` processes (mirroring the strategy in
-/// [`backend::commands::prepare_for_update`]). This catches leftover children
-/// from a previous backend that didn't exit cleanly.
+/// `node.exe` processes. This catches leftover children from a previous backend
+/// that didn't exit cleanly.
 ///
 /// On non-Windows platforms this is a thin wrapper around [`fs::remove_dir_all`]
 /// (no retries needed because Unix uses inode-based semantics).

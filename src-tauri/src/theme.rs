@@ -2,10 +2,10 @@
 //!
 //! The Harness web UI stores its appearance preference server-side in
 //! `$DSH_HOME/settings.yaml` (`ui-theme.preference`: light | dark | system).
-//! The desktop shell cannot read the cross-origin iframe DOM, so instead it
-//! watches that file and forwards changes to the frontend, which re-skins the
-//! custom titlebar to match. `system` is resolved in the frontend via
-//! `prefers-color-scheme`.
+//! While the local bootstrap document is active, the desktop watches that file
+//! and forwards changes so its custom titlebar matches Harness. The Harness
+//! top-level document applies its own theme after authenticated navigation;
+//! `system` is resolved in the bootstrap via `prefers-color-scheme`.
 
 use std::{
     path::{Path, PathBuf},

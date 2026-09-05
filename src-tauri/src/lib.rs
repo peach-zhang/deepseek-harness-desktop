@@ -3,6 +3,7 @@ mod archive;
 mod backend;
 mod commands;
 mod db;
+mod desktop_update;
 mod platform;
 mod plugins;
 mod runtime;

@@ -33,8 +33,3 @@ pub(crate) async fn get_desktop_info(
         harness_history: history,
     })
 }
-
-#[tauri::command]
-pub(crate) fn set_update_check_time(db: State<'_, db::DesktopDb>) -> Result<(), String> {
-    db.set_meta("last_update_check", &db::now_iso())
-}

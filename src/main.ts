@@ -1,10 +1,8 @@
-import { escapeHtml, parseHarnessUrl, updateProgress } from './bootstrap-utils'
+import { escapeHtml, updateProgress } from './bootstrap-utils'
 import { HARNESS_VERSION } from './generated-version'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { relaunch } from '@tauri-apps/plugin-process'
-import { check, type Update } from '@tauri-apps/plugin-updater'
 import './styles.css'
 
 export type BackendPhase = 'starting' | 'checking' | 'updating' | 'running' | 'failed' | 'stopped'
@@ -12,7 +10,6 @@ export type BackendPhase = 'starting' | 'checking' | 'updating' | 'running' | 'f
 export interface BackendStatus {
   phase: BackendPhase
   message: string
-  url: string | null
   harnessVersion: string
   updateStage?: number
   updateStageTotal?: number
@@ -37,9 +34,8 @@ const win = getCurrentWindow()
 const FALLBACK_HARNESS_VERSION = HARNESS_VERSION
 
 // ── Harness theme sync ──
-// The iframe is cross-origin, so the theme preference arrives from the Rust
-// side (watching $DSH_HOME/settings.yaml). 'system' is resolved here against
-// the OS color scheme.
+// The bootstrap theme preference arrives from the Rust side while this local
+// document is active. 'system' is resolved here against the OS color scheme.
 
 let harnessThemePreference = 'system'
 
@@ -150,43 +146,6 @@ function render(status: BackendStatus): void {
   void updateMaximizeIcon()
 }
 
-function navigateToHarness(url: string): void {
-  const parsed = parseHarnessUrl(url)
-  if (!parsed) {
-    render({
-      phase: 'failed',
-      message: '后台返回了不安全的地址，桌面壳已阻止跳转。',
-      url: null,
-      harnessVersion: FALLBACK_HARNESS_VERSION,
-    })
-    return
-  }
-  renderWithIframe(parsed.toString())
-}
-
-function renderWithIframe(url: string): void {
-  appRoot.innerHTML = `
-    <div class="titlebar" data-tauri-drag-region>
-      <span class="titlebar__title" data-tauri-drag-region>DSH Desktop</span>
-      <div class="titlebar__controls">
-        <button class="titlebar__btn" id="win-minimize" aria-label="最小化">
-          <img class="icon-minimize-img" src="${titlebarIcons().minimize}" width="12" height="12" alt="" />
-        </button>
-        <button class="titlebar__btn" id="win-maximize" aria-label="最大化">
-          <img class="icon-maximize-img" src="${titlebarIcons().maximize}" width="12" height="12" alt="" />
-        </button>
-        <button class="titlebar__btn titlebar__btn--close" id="win-close" aria-label="关闭">
-          <img class="icon-close-img" src="${titlebarIcons().close}" width="12" height="12" alt="" />
-        </button>
-      </div>
-    </div>
-    <iframe class="harness-frame" src="${escapeHtml(url)}" allow="clipboard-read; clipboard-write"></iframe>
-  `
-
-  wireTitlebar()
-  void updateMaximizeIcon()
-}
-
 function wireTitlebar(): void {
   document.querySelector<HTMLButtonElement>('#win-minimize')?.addEventListener('click', () => {
     void win.minimize()
@@ -200,10 +159,6 @@ function wireTitlebar(): void {
 }
 
 function applyStatus(status: BackendStatus): void {
-  if (status.phase === 'running' && status.url) {
-    navigateToHarness(status.url)
-    return
-  }
   render(status)
 }
 
@@ -213,7 +168,6 @@ async function restart(): Promise<void> {
   render({
     phase: 'starting',
     message: '正在重新启动内置 Harness…',
-    url: null,
     harnessVersion: FALLBACK_HARNESS_VERSION,
   })
   try {
@@ -222,7 +176,6 @@ async function restart(): Promise<void> {
     render({
       phase: 'failed',
       message: String(error),
-      url: null,
       harnessVersion: FALLBACK_HARNESS_VERSION,
     })
   } finally {
@@ -230,166 +183,10 @@ async function restart(): Promise<void> {
   }
 }
 
-// ── Desktop shell self-update ──
-// The bundled Harness runtime updates itself at startup (see update.rs); this
-// watches GitHub Releases for a newer *desktop app* via tauri-plugin-updater
-// and offers to install it. The banner is attached to document.body so the
-// render()/renderWithIframe() innerHTML rewrites never remove it.
-
-const APP_UPDATE_INTERVAL_MS = 4 * 60 * 60 * 1000
-const APP_UPDATE_DISMISS_KEY = 'dsh-desktop-dismissed-update'
-
-function dismissedUpdateVersion(): string | null {
-  try {
-    return localStorage.getItem(APP_UPDATE_DISMISS_KEY)
-  } catch {
-    return null
-  }
-}
-
-function dismissUpdateVersion(version: string): void {
-  try {
-    localStorage.setItem(APP_UPDATE_DISMISS_KEY, version)
-  } catch {
-    // Storage unavailable: the banner simply reappears on the next launch.
-  }
-}
-
-function bannerButton(label: string, primary: boolean): HTMLButtonElement {
-  const button = document.createElement('button')
-  button.type = 'button'
-  button.className = primary ? 'update-banner__btn update-banner__btn--primary' : 'update-banner__btn'
-  button.textContent = label
-  return button
-}
-
-function showUpdateBanner(update: Update): void {
-  document.querySelector('.update-banner')?.remove()
-
-  const banner = document.createElement('div')
-  banner.className = 'update-banner'
-  banner.setAttribute('role', 'status')
-
-  const text = document.createElement('div')
-  text.className = 'update-banner__text'
-  const title = document.createElement('strong')
-  title.textContent = `发现新版本 v${update.version}`
-  const detail = document.createElement('span')
-  detail.textContent = `当前版本 v${update.currentVersion}`
-  text.append(title, detail)
-
-  const actions = document.createElement('div')
-  actions.className = 'update-banner__actions'
-  const installButton = bannerButton('立即更新', true)
-  const laterButton = bannerButton('稍后', false)
-  actions.append(installButton, laterButton)
-
-  banner.append(text, actions)
-  document.body.append(banner)
-
-  laterButton.addEventListener('click', () => {
-    dismissUpdateVersion(update.version)
-    banner.remove()
-  })
-  installButton.addEventListener('click', () => {
-    void runAppUpdate(banner, title, detail, actions, update)
-  })
-}
-
-async function runAppUpdate(
-  banner: HTMLElement,
-  title: HTMLElement,
-  detail: HTMLElement,
-  actions: HTMLElement,
-  update: Update,
-): Promise<void> {
-  actions.querySelectorAll('button').forEach((button) => {
-    button.disabled = true
-  })
-  title.textContent = '正在下载更新…'
-  detail.textContent = ''
-
-  let downloaded = 0
-  let total = 0
-  try {
-    // Download the update first; the backend is still alive during this
-    // phase so progress can be shown normally.
-    await update.download((event) => {
-      if (event.event === 'Started') {
-        total = event.data.contentLength ?? 0
-      } else if (event.event === 'Progress') {
-        downloaded += event.data.chunkLength
-        detail.textContent =
-          total > 0
-            ? `已下载 ${Math.min(100, Math.round((downloaded / total) * 100))}%`
-            : `已下载 ${(downloaded / 1024 / 1024).toFixed(1)} MB`
-      }
-    })
-  } catch (error) {
-    title.textContent = '更新失败'
-    detail.textContent = String(error)
-    actions.querySelectorAll('button').forEach((button) => {
-      button.disabled = false
-    })
-    return
-  }
-
-  // Stop the Node.js backend and kill orphaned node processes before the
-  // installer runs, so it can replace locked files (e.g. node.exe).
-  title.textContent = '正在安装更新…'
-  detail.textContent = '正在停止后台进程…'
-  try {
-    await invoke('prepare_for_update')
-  } catch (error) {
-    console.warn('prepare_for_update failed:', error)
-  }
-
-  try {
-    await update.install()
-  } catch (error) {
-    title.textContent = '更新失败'
-    detail.textContent = String(error)
-    actions.querySelectorAll('button').forEach((button) => {
-      button.disabled = false
-    })
-    return
-  }
-
-  title.textContent = `v${update.version} 已就绪`
-  detail.textContent = '重启应用以完成更新'
-  actions.innerHTML = ''
-  const restartButton = bannerButton('立即重启', true)
-  const laterButton = bannerButton('稍后重启', false)
-  actions.append(restartButton, laterButton)
-  laterButton.addEventListener('click', () => {
-    banner.remove()
-  })
-  restartButton.addEventListener('click', () => {
-    void relaunch()
-  })
-}
-
-async function checkForAppUpdate(): Promise<void> {
-  try {
-    const update = await check()
-    if (!update || update.version === dismissedUpdateVersion()) return
-    showUpdateBanner(update)
-  } catch (error) {
-    // Offline or unreachable release feed: stay silent, try again later.
-    console.warn('Desktop update check failed:', error)
-  }
-}
-
-function startAppUpdateChecks(): void {
-  window.setTimeout(() => void checkForAppUpdate(), 5000)
-  window.setInterval(() => void checkForAppUpdate(), APP_UPDATE_INTERVAL_MS)
-}
-
 async function bootstrap(): Promise<void> {
   render({
     phase: 'starting',
     message: '正在启动内置 Node.js 与 DeepSeek Harness…',
-    url: null,
     harnessVersion: FALLBACK_HARNESS_VERSION,
   })
 
@@ -418,15 +215,12 @@ async function bootstrap(): Promise<void> {
     await updateMaximizeIcon()
   })
 
-  startAppUpdateChecks()
-
   try {
     applyStatus(await invoke<BackendStatus>('backend_status'))
   } catch (error) {
     render({
       phase: 'failed',
       message: String(error),
-      url: null,
       harnessVersion: FALLBACK_HARNESS_VERSION,
     })
   }

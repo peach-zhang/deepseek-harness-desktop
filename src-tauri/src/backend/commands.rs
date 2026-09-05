@@ -26,12 +26,3 @@ pub(crate) async fn restart_backend(
         }
     }
 }
-
-/// Stops the Harness backend before a desktop app update is installed.
-/// `BackendManager::stop` terminates only the process tree started by this app,
-/// so unrelated Node.js workloads on the machine are never affected.
-#[tauri::command]
-pub(crate) async fn prepare_for_update(manager: State<'_, BackendManager>) -> Result<(), String> {
-    manager.stop().await;
-    Ok(())
-}
