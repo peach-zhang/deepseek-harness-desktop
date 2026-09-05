@@ -14,7 +14,7 @@ Harness 及其 Web UI 均已内置，无需安装 Node.js，也不需要手动�
 
 ## 下载
 
-**当前版本：[DSH Desktop v0.1.12](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.12)**
+**当前版本：[DSH Desktop v0.1.13](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.13)**
 
 Windows x64 和 macOS 安装包统一从
 [最新版下载页面](https://github.com/peach-zhang/deepseek-harness-desktop/releases/latest)
@@ -101,8 +101,8 @@ pnpm build:desktop
 3. 创建并推送相同版本的标签，例如：
 
 ```bash
-git tag v0.1.12
-git push origin v0.1.12
+git tag v0.1.13
+git push origin v0.1.13
 ```
 
 GitHub Actions 会在官方托管的原生运行器上构建以下目标：
