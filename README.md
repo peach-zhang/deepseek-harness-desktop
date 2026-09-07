@@ -14,7 +14,7 @@ install Node.js or run `npx @deepseek-ai/dsh web`.
 
 ## Download
 
-**Current release: [DSH Desktop v0.1.13](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.13)**
+**Current release: [DSH Desktop v0.1.14](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.14)**
 
 Windows x64 and macOS installers are available from the
 [Latest Release](https://github.com/peach-zhang/deepseek-harness-desktop/releases/latest)
@@ -114,8 +114,8 @@ committed.
 3. Commit and push a matching tag, for example:
 
 ```bash
-git tag v0.1.13
-git push origin v0.1.13
+git tag v0.1.14
+git push origin v0.1.14
 ```
 
 The release workflow builds these targets on native GitHub-hosted runners:
