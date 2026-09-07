@@ -70,7 +70,7 @@ async fn check_once(app: &AppHandle, backend: &BackendManager) -> Result<(), Str
             "立即更新".into(),
             "稍后".into(),
         ));
-    let prompt = if let Some(window) = app.get_webview_window("main") {
+    let prompt = if let Some(window) = app.get_window("main") {
         prompt.parent(&window)
     } else {
         prompt
@@ -84,7 +84,7 @@ async fn check_once(app: &AppHandle, backend: &BackendManager) -> Result<(), Str
         return Ok(());
     }
 
-    let window = app.get_webview_window("main");
+    let window = app.get_window("main");
     if let Some(window) = &window {
         let _ = window.set_progress_bar(ProgressBarState {
             status: Some(ProgressBarStatus::Indeterminate),

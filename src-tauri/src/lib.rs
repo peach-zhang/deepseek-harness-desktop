@@ -9,6 +9,7 @@ mod plugins;
 mod runtime;
 mod theme;
 mod update;
+mod window_shell;
 
 /// Bundled Harness version. Read from `HARNESS_VERSION` at the project root
 /// by `build.rs` — change that single file when updating the bundled release.

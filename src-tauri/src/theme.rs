@@ -2,10 +2,9 @@
 //!
 //! The Harness web UI stores its appearance preference server-side in
 //! `$DSH_HOME/settings.yaml` (`ui-theme.preference`: light | dark | system).
-//! While the local bootstrap document is active, the desktop watches that file
-//! and forwards changes so its custom titlebar matches Harness. The Harness
-//! top-level document applies its own theme after authenticated navigation;
-//! `system` is resolved in the bootstrap via `prefers-color-scheme`.
+//! 桌面持续监听该文件，让常驻本地壳层的自定义标题栏与 Harness 同步。
+//! Harness 在独立 WebView 中应用自己的主题；本地壳层通过
+//! `prefers-color-scheme` 解析 `system` 偏好。
 
 use std::{
     path::{Path, PathBuf},

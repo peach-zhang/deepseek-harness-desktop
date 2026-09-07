@@ -1,12 +1,11 @@
 //! Tauri application builder — setup, window creation, and run loop.
 
-use tauri::{Manager, RunEvent};
-use tauri::webview::{DownloadEvent, PageLoadEvent, WebviewWindowBuilder};
+use tauri::webview::WebviewBuilder;
+use tauri::{LogicalPosition, LogicalSize, Manager, RunEvent, WindowBuilder, WindowEvent};
 
 use crate::backend::{self, BackendManager};
 use crate::commands;
 use crate::db;
-use crate::platform::open_containing_folder;
 use crate::theme;
 use crate::HARNESS_VERSION;
 
@@ -26,7 +25,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
@@ -39,10 +38,8 @@ pub fn run() {
             theme::get_harness_theme,
         ])
         .setup(move |app| {
-            // Manually create the main window with a download handler so files
-            // saved from the Harness page automatically reveal in Explorer /
-            // Finder. The window is marked `"create": false` in tauri.conf.json
-            // to prevent Tauri from building it before this handler is attached.
+            // 常驻本地壳层负责标题栏；Harness 在独立子 WebView 中加载，
+            // 不再通过顶层导航替换壳层，也不再启用系统装饰。
             let window_config = app
                 .config()
                 .app
@@ -51,42 +48,28 @@ pub fn run() {
                 .ok_or_else(|| "主窗口配置缺失".to_owned())?;
             let navigation_manager = manager_for_setup.clone();
             let page_load_manager = manager_for_setup.clone();
-            let page_load_app = app.handle().clone();
-            let webview_window = WebviewWindowBuilder::from_config(app.handle(), window_config)?
-                .on_navigation(move |url| navigation_manager.allows_navigation(url))
-                .on_page_load(move |window, payload| {
-                    page_load_manager.capture_bootstrap_url(payload.url());
-                    if matches!(payload.event(), PageLoadEvent::Finished) {
-                        page_load_manager.handle_page_load(
-                            &page_load_app,
-                            &window,
-                            payload.url(),
-                        );
-                    }
-                })
-                .on_download(|_webview, event| match event {
-                    DownloadEvent::Requested { .. } => {
-                        // Allow the download to proceed with its default path.
-                        true
-                    }
-                    DownloadEvent::Finished {
-                        url: _,
-                        path,
-                        success,
-                    } => {
-                        if let Some(file_path) = path {
-                            if success {
-                                open_containing_folder(&file_path);
-                            }
-                        }
-                        true
-                    }
-                    _ => true,
-                })
-                .build()?;
-            if let Ok(url) = webview_window.url() {
+            let window = WindowBuilder::from_config(app.handle(), window_config)?.build()?;
+            let size = window.inner_size()?.to_logical::<f64>(window.scale_factor()?);
+            let bootstrap = window.add_child(
+                WebviewBuilder::new("main", window_config.url.clone())
+                    .on_navigation(move |url| navigation_manager.allows_bootstrap_navigation(url))
+                    .on_page_load(move |_webview, payload| {
+                        page_load_manager.capture_bootstrap_url(payload.url());
+                    }),
+                LogicalPosition::new(0.0, 0.0),
+                LogicalSize::new(size.width, size.height),
+            )?;
+            if let Ok(url) = bootstrap.url() {
                 manager_for_setup.capture_bootstrap_url(&url);
             }
+            let layout_window = window.clone();
+            window.on_window_event(move |event| {
+                if matches!(event, WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }) {
+                    if let Err(error) = crate::window_shell::resize_webviews(&layout_window) {
+                        log::warn!("无法调整窗口内容区域：{error}");
+                    }
+                }
+            });
 
             // Initialize SQLite database
             let data_dir = app
@@ -101,8 +84,7 @@ pub fn run() {
             }
             app.manage(db);
 
-            // Desktop update checks and prompts live in Rust because the local
-            // bootstrap document is replaced by the authenticated Harness page.
+            // 桌面更新检查与原生提示继续由 Rust 管理。
             crate::desktop_update::spawn_update_checks(
                 app.handle().clone(),
                 manager_for_setup.clone(),

@@ -12,7 +12,10 @@ use std::{
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use sha2::{Digest, Sha256};
-use tauri::{webview::WebviewWindow, AppHandle, Emitter, Manager};
+use tauri::{
+    webview::{DownloadEvent, PageLoadEvent, WebviewBuilder},
+    AppHandle, Emitter, Manager, Webview, WebviewUrl,
+};
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
@@ -86,15 +89,13 @@ impl BackendManager {
         self.bootstrap_url.lock().ok()?.clone()
     }
 
-    pub(crate) fn allows_navigation(&self, url: &Url) -> bool {
-        if self
-            .bootstrap_url()
+    pub(crate) fn allows_bootstrap_navigation(&self, url: &Url) -> bool {
+        self.bootstrap_url()
             .is_some_and(|bootstrap| bootstrap.origin() == url.origin())
             || is_bootstrap_url(url)
-        {
-            return true;
-        }
+    }
 
+    pub(crate) fn allows_harness_navigation(&self, url: &Url) -> bool {
         self.harness_origin
             .lock()
             .ok()
@@ -134,6 +135,7 @@ impl BackendManager {
         // and must not race a concurrent restart.
         let _start_guard = self.start_lock.lock().await;
         self.stop().await;
+        self.restore_bootstrap(&app);
 
         let resource_dir = app
             .path()
@@ -401,7 +403,7 @@ impl BackendManager {
 
     fn show_harness(&self, app: &AppHandle, generation: u64, url: Url) -> Result<(), String> {
         let window = app
-            .get_webview_window("main")
+            .get_window("main")
             .ok_or_else(|| "无法定位主窗口。".to_owned())?;
         let navigation = HarnessNavigation {
             host: url.host_str().unwrap_or("127.0.0.1").to_owned(),
@@ -415,24 +417,42 @@ impl BackendManager {
             .harness_origin
             .lock()
             .map_err(|_| "Harness origin 锁中毒".to_owned())? = Some(navigation);
-        if let Err(error) = window.set_decorations(true) {
-            if let Ok(mut origin) = self.harness_origin.lock() {
-                *origin = None;
-            }
-            return Err(format!("无法启用系统标题栏：{error}"));
-        }
-        if let Err(error) = window.navigate(url) {
-            if let Ok(mut origin) = self.harness_origin.lock() {
-                *origin = None;
-            }
-            let _ = window.set_decorations(false);
-            return Err(format!("无法打开 DeepSeek Harness：{error}"));
-        }
+        let navigation_manager = self.clone();
+        let page_load_manager = self.clone();
+        let page_load_app = app.clone();
+        let builder = WebviewBuilder::new("harness", WebviewUrl::External(url))
+            .on_navigation(move |url| navigation_manager.allows_harness_navigation(url))
+            .on_page_load(move |webview, payload| {
+                if matches!(payload.event(), PageLoadEvent::Finished) {
+                    page_load_manager.handle_page_load(&page_load_app, &webview, payload.url());
+                }
+            })
+            .on_download(|_webview, event| {
+                if let DownloadEvent::Finished {
+                    path: Some(path),
+                    success: true,
+                    ..
+                } = event
+                {
+                    crate::platform::open_containing_folder(&path);
+                }
+                true
+            });
+        let size = window
+            .inner_size()
+            .map_err(|error| format!("无法读取窗口尺寸：{error}"))?
+            .to_logical::<f64>(window.scale_factor().map_err(|error| error.to_string())?);
+        let bounds = crate::window_shell::harness_bounds(size);
+        let webview = window
+            .add_child(builder, bounds.position, bounds.size)
+            .map_err(|error| format!("无法打开 DeepSeek Harness：{error}"))?;
+        // 创建期间窗口可能发生缩放，使用最新尺寸再次同步。
+        crate::window_shell::resize_webviews(&window).map_err(|error| error.to_string())?;
+        let _ = webview.set_focus();
         Ok(())
     }
 
-    pub(crate) fn handle_page_load(&self, app: &AppHandle, window: &WebviewWindow, url: &Url) {
-        self.capture_bootstrap_url(url);
+    pub(crate) fn handle_page_load(&self, app: &AppHandle, window: &Webview, url: &Url) {
         let Some(navigation) = self
             .harness_origin
             .lock()
@@ -504,19 +524,18 @@ impl BackendManager {
         if let Ok(mut origin) = self.harness_origin.lock() {
             *origin = None;
         }
-        let Some(url) = self.bootstrap_url() else {
-            log::warn!("cannot restore bootstrap because its URL was not recorded");
-            return;
-        };
-        let Some(window) = app.get_webview_window("main") else {
-            log::warn!("cannot restore bootstrap because the main window is missing");
-            return;
-        };
-        if let Err(error) = window.set_decorations(false) {
-            log::warn!("failed to restore bootstrap window decorations: {error}");
+        if let Some(harness) = app.get_webview("harness") {
+            if let Err(error) = harness.close() {
+                log::warn!("无法关闭 Harness 子 WebView：{error}");
+            }
         }
-        if let Err(error) = window.navigate(url) {
-            log::warn!("failed to restore bootstrap page: {error}");
+        if let Some(window) = app.get_window("main") {
+            if let Err(error) = crate::window_shell::resize_webviews(&window) {
+                log::warn!("无法恢复启动页尺寸：{error}");
+            }
+        }
+        if let Some(bootstrap) = app.get_webview("main") {
+            let _ = bootstrap.set_focus();
         }
     }
 }
@@ -527,7 +546,7 @@ fn dsh_auth_cookie_name(url: &Url) -> Option<String> {
     Some(format!("dsh-auth-{}", URL_SAFE_NO_PAD.encode(digest)))
 }
 
-fn has_dsh_auth_cookie(window: &WebviewWindow, url: &Url) -> bool {
+fn has_dsh_auth_cookie(window: &Webview, url: &Url) -> bool {
     let Some(expected_name) = dsh_auth_cookie_name(url) else {
         return false;
     };
@@ -658,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn navigation_is_limited_to_bootstrap_and_active_harness_origins() {
+    fn navigation_keeps_bootstrap_and_harness_in_separate_webviews() {
         let manager = BackendManager::default();
         manager.capture_bootstrap_url(&Url::parse("http://tauri.localhost/").unwrap());
         let navigation = HarnessNavigation {
@@ -673,13 +692,21 @@ mod tests {
         );
         *manager.harness_origin.lock().unwrap() = Some(navigation);
 
-        assert!(manager.allows_navigation(&Url::parse("http://tauri.localhost/").unwrap()));
+        let bootstrap = Url::parse("http://tauri.localhost/").unwrap();
+        let harness = Url::parse("http://127.0.0.1:49152/").unwrap();
+        assert!(manager.allows_bootstrap_navigation(&bootstrap));
+        assert!(!manager.allows_bootstrap_navigation(&harness));
+        assert!(!manager.allows_harness_navigation(&bootstrap));
         assert!(
-            manager.allows_navigation(&Url::parse("http://127.0.0.1:49152/session/abc").unwrap())
+            manager.allows_harness_navigation(&Url::parse("http://127.0.0.1:49152/session/abc").unwrap())
         );
-        assert!(!manager.allows_navigation(&Url::parse("http://127.0.0.1:49153/").unwrap()));
-        assert!(!manager.allows_navigation(&Url::parse("https://example.com/").unwrap()));
-        assert!(!manager.allows_navigation(&Url::parse("http://localhost:9999/").unwrap()));
+        assert!(!manager.allows_harness_navigation(&Url::parse("http://127.0.0.1:49153/").unwrap()));
+        assert!(!manager.allows_harness_navigation(&Url::parse("https://example.com/").unwrap()));
+        assert!(!manager.allows_harness_navigation(&Url::parse("http://localhost:9999/").unwrap()));
+
+        *manager.harness_origin.lock().unwrap() = None;
+        assert!(!manager.allows_harness_navigation(&harness));
+        assert!(manager.allows_bootstrap_navigation(&bootstrap));
     }
 
     #[test]
