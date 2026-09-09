@@ -333,7 +333,7 @@ impl BackendManager {
                             }
 
                             if let Err(error) =
-                                manager.show_harness(&app_for_events, generation, url)
+                                manager.show_harness(&app_for_events, generation, url.clone())
                             {
                                 let (status, child) = {
                                     let mut runtime = manager.inner.lock().await;
@@ -640,7 +640,7 @@ enum ReadinessIssue {
     UnsafeQuery,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 enum ReadinessLine {
     /// The Harness readiness URL, ready to load in the child WebView.
     Ready(Url),
@@ -790,10 +790,10 @@ mod tests {
                 "dsh web: http://127.0.0.1:49152/?token=launch_token",
                 "http://127.0.0.1:49152/?token=launch_token",
             ),
-            // The CLI may pad the line; surrounding whitespace is not part of
-            // the contract and must not turn a valid signal into a timeout.
+            // The URL may be padded; that is not part of the contract and must
+            // not turn a valid signal into a timeout.
             (
-                "  dsh web: http://127.0.0.1:49152/  ",
+                "dsh web:   http://127.0.0.1:49152/  ",
                 "http://127.0.0.1:49152/",
             ),
         ] {
@@ -804,18 +804,26 @@ mod tests {
                 "rejected {line:?}"
             );
         }
+
+        // The caller trims each line before parsing, so leading whitespace
+        // never reaches the parser; a line that is not prefixed verbatim is not
+        // a readiness signal at all.
+        assert_eq!(
+            parse_readiness_line("  dsh web: http://127.0.0.1:49152/"),
+            ReadinessLine::Unrelated
+        );
     }
 
     #[test]
     fn reports_why_a_readiness_line_was_rejected() {
         for (line, expected) in [
-            ("dsh web:", ReadinessIssue::MissingUrl),
+            ("dsh web: ", ReadinessIssue::MissingUrl),
             ("dsh web:   ", ReadinessIssue::MissingUrl),
+            ("dsh web: \u{7f}", ReadinessIssue::MissingUrl),
             (
                 "dsh web: http://127.0.0.1:3080 ready",
                 ReadinessIssue::TrailingTokens,
             ),
-            ("dsh web: \u{7f}", ReadinessIssue::MissingUrl),
             ("dsh web: not-a-url", ReadinessIssue::Unparsable),
             (
                 "dsh web: http://127.0.0.1:3080/?token=sec\u{7f}ret",
@@ -858,7 +866,7 @@ mod tests {
                 ReadinessIssue::UnsafeQuery,
             ),
             (
-                "dsh web: http://127.0.0.1:3080/?token=UPPER_not_allowed",
+                "dsh web: http://127.0.0.1:3080/?token=has.dot",
                 ReadinessIssue::UnsafeQuery,
             ),
         ] {

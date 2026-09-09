@@ -104,16 +104,10 @@ pub(crate) async fn toggle_desktop_info(app: AppHandle) -> Result<bool, String> 
         .map_err(|error| format!("无法读取窗口尺寸：{error}"))?
         .to_logical::<f64>(window.scale_factor().map_err(|error| error.to_string())?);
     let bounds = window_shell::info_panel_bounds(size);
-    let base = app
-        .config()
-        .app
-        .windows
-        .first()
-        .and_then(|config| config.url.clone())
-        .ok_or_else(|| "主窗口配置缺少本地页面地址。".to_owned())?;
-    let url = base
-        .join(INFO_PAGE)
-        .map_err(|error| format!("无法解析版本信息面板地址：{error}"))?;
+    // `WebviewUrl::App` resolves the path against whichever origin serves the
+    // bundled frontend (the dev server or the packaged assets), so the panel
+    // works identically in development and in a release build.
+    let url = tauri::WebviewUrl::App(INFO_PAGE.into());
 
     let builder = tauri::webview::WebviewBuilder::new(INFO_WEBVIEW, url);
     let webview = window

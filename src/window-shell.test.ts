@@ -43,6 +43,7 @@ describe('版本信息面板契约', () => {
     expect(commands).toContain('const INFO_WEBVIEW: &str = "info";')
     expect(commands).toContain('const INFO_PAGE: &str = "info.html";')
     expect(commands).toContain('WebviewBuilder::new(INFO_WEBVIEW, url)')
+    expect(commands).toContain('WebviewUrl::App(INFO_PAGE.into())')
     expect(commands).not.toMatch(/WebviewUrl::External/)
   })
 
