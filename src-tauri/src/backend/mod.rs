@@ -32,6 +32,10 @@ struct BackendRuntime {
     status: BackendStatus,
     diagnostics: VecDeque<String>,
     harness_version: String,
+    /// True once a valid `dsh web: <url>` readiness line was seen for this
+    /// generation. Used to explain a startup timeout: "the CLI never announced
+    /// readiness" is a very different failure from "the page did not load".
+    readiness_seen: bool,
 }
 
 #[derive(Clone)]
@@ -63,6 +67,7 @@ impl Default for BackendRuntime {
             status: BackendStatus::starting(HARNESS_VERSION),
             diagnostics: VecDeque::new(),
             harness_version: HARNESS_VERSION.into(),
+            readiness_seen: false,
         }
     }
 }
@@ -154,6 +159,7 @@ impl BackendManager {
             runtime.navigating = false;
             runtime.status = BackendStatus::starting(HARNESS_VERSION);
             runtime.diagnostics.clear();
+            runtime.readiness_seen = false;
             runtime.generation
         };
 
@@ -270,12 +276,15 @@ impl BackendManager {
             }
             runtime.generation = runtime.generation.wrapping_add(1);
             let navigation_started = runtime.navigating;
+            let readiness_seen = runtime.readiness_seen;
             runtime.navigating = false;
             if let Some(child) = runtime.child.take() {
                 stop_child(child);
             }
             let message = if navigation_started {
                 "DeepSeek Harness 页面认证超时，未能建立有效的浏览器会话。"
+            } else if !readiness_seen {
+                "DeepSeek Harness 启动超时：未在 45 秒内输出就绪地址（`dsh web: <url>`）。"
             } else {
                 "DeepSeek Harness 启动超时，未在 45 秒内报告就绪。"
             };
@@ -301,9 +310,16 @@ impl BackendManager {
                             .map(str::trim)
                             .filter(|line| !line.is_empty())
                         {
-                            let ready_url = readiness_url(line);
-                            log::info!(target: "dsh", "{}", safe_stdout_line(line, ready_url.as_ref()));
-                            let Some(url) = ready_url else {
+                            let readiness = parse_readiness_line(line);
+                            if let ReadinessLine::Malformed(issue) = &readiness {
+                                log::warn!(
+                                    target: "dsh",
+                                    "ignored malformed `{READINESS_PREFIX}` readiness line ({})",
+                                    issue.description()
+                                );
+                            }
+                            log::info!(target: "dsh", "{}", safe_stdout_line(line, &readiness));
+                            let Some(url) = readiness.url() else {
                                 continue;
                             };
 
@@ -313,6 +329,7 @@ impl BackendManager {
                                     continue;
                                 }
                                 runtime.navigating = true;
+                                runtime.readiness_seen = true;
                             }
 
                             if let Err(error) =
@@ -347,11 +364,14 @@ impl BackendManager {
                             .map(str::trim)
                             .filter(|line| !line.is_empty())
                         {
-                            let ready_url = readiness_url(line);
-                            let safe_line = safe_stdout_line(line, ready_url.as_ref());
+                            let readiness = parse_readiness_line(line);
+                            let safe_line = safe_stdout_line(line, &readiness);
                             log::warn!(target: "dsh", "{safe_line}");
                             let mut runtime = manager.inner.lock().await;
                             if runtime.generation == generation {
+                                if readiness.url().is_some() {
+                                    runtime.readiness_seen = true;
+                                }
                                 if runtime.diagnostics.len() == MAX_DIAGNOSTIC_LINES {
                                     runtime.diagnostics.pop_front();
                                 }
@@ -381,6 +401,17 @@ impl BackendManager {
                             format!("DeepSeek Harness 意外停止（{suffix}）。")
                         } else {
                             format!("DeepSeek Harness 意外停止（{suffix}）：{detail}")
+                        };
+                        // A process that died before announcing a readiness URL
+                        // almost always means the CLI rejected its arguments or
+                        // crashed during bootstrap; say so explicitly instead of
+                        // leaving the user with only a bare exit code.
+                        let message = if runtime.readiness_seen {
+                            message
+                        } else {
+                            format!(
+                                "{message}（进程在输出就绪地址 `{READINESS_PREFIX}<url>` 之前即退出）"
+                            )
                         };
                         let failed_version = runtime.harness_version.clone();
                         let status = BackendStatus::failed(message, &failed_version);
@@ -449,6 +480,9 @@ impl BackendManager {
         // 创建期间窗口可能发生缩放，使用最新尺寸再次同步。
         crate::window_shell::resize_webviews(&window).map_err(|error| error.to_string())?;
         let _ = webview.set_focus();
+        // The Harness WebView was created last, so it now stacks above the
+        // version panel; re-create the panel to keep it visible.
+        crate::commands::reopen_info_panel_above_harness(app);
         Ok(())
     }
 
@@ -524,6 +558,8 @@ impl BackendManager {
         if let Ok(mut origin) = self.harness_origin.lock() {
             *origin = None;
         }
+        // The panel only makes sense while the bootstrap page owns the window.
+        crate::commands::close_info_panel(app);
         if let Some(harness) = app.get_webview("harness") {
             if let Err(error) = harness.close() {
                 log::warn!("无法关闭 Harness 子 WebView：{error}");
@@ -546,6 +582,13 @@ fn dsh_auth_cookie_name(url: &Url) -> Option<String> {
     Some(format!("dsh-auth-{}", URL_SAFE_NO_PAD.encode(digest)))
 }
 
+/// True only when a *non-empty* session cookie named for this exact
+/// `127.0.0.1:<port>` authority is present.
+///
+/// Checking the name alone would accept a cookie that exists but carries no
+/// credential, which is precisely the broken state this guard is meant to
+/// catch: the launch token exchange must have produced a usable session before
+/// the Harness page can be considered loaded.
 fn has_dsh_auth_cookie(window: &Webview, url: &Url) -> bool {
     let Some(expected_name) = dsh_auth_cookie_name(url) else {
         return false;
@@ -553,8 +596,14 @@ fn has_dsh_auth_cookie(window: &Webview, url: &Url) -> bool {
     window.cookies_for_url(url.clone()).is_ok_and(|cookies| {
         cookies
             .iter()
-            .any(|cookie| cookie.name() == expected_name.as_str())
+            .any(|cookie| session_cookie_is_valid(cookie.name(), &expected_name, cookie.value()))
     })
+}
+
+/// A session cookie only counts when the name matches the authority-derived
+/// name *and* it actually carries a credential.
+fn session_cookie_is_valid(name: &str, expected_name: &str, value: &str) -> bool {
+    name == expected_name && !value.is_empty()
 }
 
 fn is_bootstrap_url(url: &Url) -> bool {
@@ -567,9 +616,78 @@ fn is_bootstrap_url(url: &Url) -> bool {
         && url.port() == Some(1420))
 }
 
-fn readiness_url(line: &str) -> Option<Url> {
-    let candidate = line.strip_prefix("dsh web: ")?.split_whitespace().next()?;
-    let parsed = Url::parse(candidate).ok()?;
+const READINESS_PREFIX: &str = "dsh web: ";
+
+/// Why a `dsh web: ` line could not be turned into a loadable Harness URL.
+///
+/// The distinction is diagnostic only: every variant is refused, but knowing
+/// *which* check failed turns a silent 45-second startup timeout into an
+/// actionable log line when the upstream CLI output format changes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReadinessIssue {
+    /// The URL token still contains a control character after the edges were
+    /// trimmed, so it is dropped without echoing it into logs.
+    Unprintable,
+    /// No URL token at all after the prefix.
+    MissingUrl,
+    /// Trailing tokens after the URL, e.g. a CLI that appended a sentence.
+    TrailingTokens,
+    /// The URL token is not a parseable absolute URL.
+    Unparsable,
+    /// Parsed, but not an `http://127.0.0.1:<port>/` URL.
+    NotLoopbackHttp,
+    /// Loopback, but the query string is not a single valid `token` parameter.
+    UnsafeQuery,
+}
+
+#[derive(Debug)]
+enum ReadinessLine {
+    /// The Harness readiness URL, ready to load in the child WebView.
+    Ready(Url),
+    /// A `dsh web: ` line that failed validation.
+    Malformed(ReadinessIssue),
+    /// An ordinary log line that is not a readiness signal.
+    Unrelated,
+}
+
+impl ReadinessLine {
+    fn url(&self) -> Option<&Url> {
+        match self {
+            Self::Ready(url) => Some(url),
+            _ => None,
+        }
+    }
+}
+
+/// Parses one stdout/stderr line into a validated Harness readiness URL.
+///
+/// The sidecar contract is a single line: `dsh web: http://127.0.0.1:<port>`
+/// optionally followed by `?token=<base64url>`. Only that exact shape is
+/// accepted — anything else is reported as [`ReadinessIssue`] so the caller can
+/// log *why* startup is not progressing.
+fn parse_readiness_line(line: &str) -> ReadinessLine {
+    let Some(rest) = line.strip_prefix(READINESS_PREFIX) else {
+        return ReadinessLine::Unrelated;
+    };
+    // Trim only the edges. Interior whitespace still means "two tokens", which
+    // keeps a CLI that appends prose to its readiness URL detectable, while a
+    // trailing `\r\n` from the pipe is tolerated.
+    let rest = rest.trim_matches(char::is_control).trim();
+    let mut tokens = rest.split_whitespace();
+    let Some(candidate) = tokens.next() else {
+        return ReadinessLine::Malformed(ReadinessIssue::MissingUrl);
+    };
+    if tokens.next().is_some() {
+        return ReadinessLine::Malformed(ReadinessIssue::TrailingTokens);
+    }
+    // A malformed URL may embed an unredacted launch token, so never echo the
+    // raw candidate into logs.
+    if candidate.chars().any(char::is_control) {
+        return ReadinessLine::Malformed(ReadinessIssue::Unprintable);
+    }
+    let Ok(parsed) = Url::parse(candidate) else {
+        return ReadinessLine::Malformed(ReadinessIssue::Unparsable);
+    };
     if parsed.scheme() != "http"
         || parsed.host_str() != Some("127.0.0.1")
         || parsed.port().is_none()
@@ -578,7 +696,7 @@ fn readiness_url(line: &str) -> Option<Url> {
         || parsed.path() != "/"
         || parsed.fragment().is_some()
     {
-        return None;
+        return ReadinessLine::Malformed(ReadinessIssue::NotLoopbackHttp);
     }
 
     let query = parsed.query_pairs().collect::<Vec<_>>();
@@ -591,13 +709,28 @@ fn readiness_url(line: &str) -> Option<Url> {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'))
     {
-        return None;
+        return ReadinessLine::Malformed(ReadinessIssue::UnsafeQuery);
     }
-    Some(parsed)
+    ReadinessLine::Ready(parsed)
 }
 
-fn safe_stdout_line(line: &str, ready_url: Option<&Url>) -> String {
-    if let Some(url) = ready_url {
+impl ReadinessIssue {
+    /// Operator-facing explanation. Deliberately generic: it must never leak a
+    /// rejected URL that may still carry an unredacted launch token.
+    fn description(self) -> &'static str {
+        match self {
+            Self::Unprintable => "输出包含不可打印字符",
+            Self::MissingUrl => "前缀之后缺少 URL",
+            Self::TrailingTokens => "URL 之后存在多余内容",
+            Self::Unparsable => "URL 无法解析",
+            Self::NotLoopbackHttp => "URL 不是 http://127.0.0.1:<port>/ 形式",
+            Self::UnsafeQuery => "查询串不是单个合法的 token 参数",
+        }
+    }
+}
+
+fn safe_stdout_line(line: &str, readiness: &ReadinessLine) -> String {
+    if let ReadinessLine::Ready(url) = readiness {
         let credential = if url.query().is_some() {
             "?token=[REDACTED]"
         } else {
@@ -611,7 +744,7 @@ fn safe_stdout_line(line: &str, ready_url: Option<&Url>) -> String {
             credential
         );
     }
-    if line.starts_with("dsh web: ") {
+    if line.starts_with(READINESS_PREFIX) {
         return "dsh web: [invalid readiness URL omitted]".to_owned();
     }
     line.to_owned()
@@ -648,31 +781,108 @@ mod tests {
 
     #[test]
     fn accepts_loopback_readiness_line() {
-        assert_eq!(
-            readiness_url("dsh web: http://127.0.0.1:49152").map(|url| url.to_string()),
-            Some("http://127.0.0.1:49152/".into())
-        );
-        assert_eq!(
-            readiness_url("dsh web: http://127.0.0.1:49152/?token=launch_token")
-                .map(|url| url.to_string()),
-            Some("http://127.0.0.1:49152/?token=launch_token".into())
-        );
+        for (line, expected) in [
+            (
+                "dsh web: http://127.0.0.1:49152",
+                "http://127.0.0.1:49152/",
+            ),
+            (
+                "dsh web: http://127.0.0.1:49152/?token=launch_token",
+                "http://127.0.0.1:49152/?token=launch_token",
+            ),
+            // The CLI may pad the line; surrounding whitespace is not part of
+            // the contract and must not turn a valid signal into a timeout.
+            (
+                "  dsh web: http://127.0.0.1:49152/  ",
+                "http://127.0.0.1:49152/",
+            ),
+        ] {
+            let readiness = parse_readiness_line(line);
+            assert_eq!(
+                readiness.url().map(Url::to_string).as_deref(),
+                Some(expected),
+                "rejected {line:?}"
+            );
+        }
     }
 
     #[test]
-    fn rejects_unsafe_or_malformed_readiness_line() {
-        for line in [
-            "dsh web: http://localhost:3080",
-            "dsh web: https://127.0.0.1:3080",
-            "dsh web: http://example.com:3080",
-            "dsh web: http://user@127.0.0.1:3080",
-            "dsh web: http://127.0.0.1:3080/session",
-            "dsh web: http://127.0.0.1:3080/#fragment",
-            "dsh web: http://127.0.0.1:3080/?token=",
-            "dsh web: http://127.0.0.1:3080/?token=valid&extra=value",
-            "dsh web: http://127.0.0.1:3080/?token=not%20base64url",
+    fn reports_why_a_readiness_line_was_rejected() {
+        for (line, expected) in [
+            ("dsh web:", ReadinessIssue::MissingUrl),
+            ("dsh web:   ", ReadinessIssue::MissingUrl),
+            (
+                "dsh web: http://127.0.0.1:3080 ready",
+                ReadinessIssue::TrailingTokens,
+            ),
+            ("dsh web: \u{7f}", ReadinessIssue::MissingUrl),
+            ("dsh web: not-a-url", ReadinessIssue::Unparsable),
+            (
+                "dsh web: http://127.0.0.1:3080/?token=sec\u{7f}ret",
+                ReadinessIssue::Unprintable,
+            ),
+            (
+                "dsh web: http://localhost:3080",
+                ReadinessIssue::NotLoopbackHttp,
+            ),
+            (
+                "dsh web: https://127.0.0.1:3080",
+                ReadinessIssue::NotLoopbackHttp,
+            ),
+            (
+                "dsh web: http://example.com:3080",
+                ReadinessIssue::NotLoopbackHttp,
+            ),
+            (
+                "dsh web: http://user@127.0.0.1:3080",
+                ReadinessIssue::NotLoopbackHttp,
+            ),
+            (
+                "dsh web: http://127.0.0.1:3080/session",
+                ReadinessIssue::NotLoopbackHttp,
+            ),
+            (
+                "dsh web: http://127.0.0.1:3080/#fragment",
+                ReadinessIssue::NotLoopbackHttp,
+            ),
+            (
+                "dsh web: http://127.0.0.1:3080/?token=",
+                ReadinessIssue::UnsafeQuery,
+            ),
+            (
+                "dsh web: http://127.0.0.1:3080/?token=valid&extra=value",
+                ReadinessIssue::UnsafeQuery,
+            ),
+            (
+                "dsh web: http://127.0.0.1:3080/?token=not%20base64url",
+                ReadinessIssue::UnsafeQuery,
+            ),
+            (
+                "dsh web: http://127.0.0.1:3080/?token=UPPER_not_allowed",
+                ReadinessIssue::UnsafeQuery,
+            ),
         ] {
-            assert_eq!(readiness_url(line), None, "accepted {line}");
+            assert_eq!(
+                parse_readiness_line(line),
+                ReadinessLine::Malformed(expected),
+                "misclassified {line:?}"
+            );
+            assert!(
+                parse_readiness_line(line).url().is_none(),
+                "exposed a URL for {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_lines_that_are_not_readiness_signals() {
+        for line in [
+            "starting dsh web server",
+            "DSH web: http://127.0.0.1:3080",
+            "dsh web server ready",
+            "",
+        ] {
+            assert_eq!(parse_readiness_line(line), ReadinessLine::Unrelated);
         }
     }
 
@@ -723,14 +933,37 @@ mod tests {
     #[test]
     fn redacts_launch_tokens_from_stdout() {
         let line = "dsh web: http://127.0.0.1:49152/?token=super_secret";
-        let url = readiness_url(line);
-        let safe = safe_stdout_line(line, url.as_ref());
+        let readiness = parse_readiness_line(line);
+        let safe = safe_stdout_line(line, &readiness);
         assert_eq!(safe, "dsh web: http://127.0.0.1:49152/?token=[REDACTED]");
         assert!(!safe.contains("super_secret"));
 
         let invalid = "dsh web: http://evil.example/?token=also_secret";
-        let safe_invalid = safe_stdout_line(invalid, readiness_url(invalid).as_ref());
+        let readiness = parse_readiness_line(invalid);
+        let safe_invalid = safe_stdout_line(invalid, &readiness);
         assert_eq!(safe_invalid, "dsh web: [invalid readiness URL omitted]");
         assert!(!safe_invalid.contains("also_secret"));
+        assert!(!safe_invalid.contains("evil.example"));
+
+        // Rejection reasons are logged, so they must stay token-free too.
+        for issue in [
+            ReadinessIssue::Unprintable,
+            ReadinessIssue::MissingUrl,
+            ReadinessIssue::TrailingTokens,
+            ReadinessIssue::Unparsable,
+            ReadinessIssue::NotLoopbackHttp,
+            ReadinessIssue::UnsafeQuery,
+        ] {
+            assert!(!issue.description().contains("token="));
+        }
+    }
+
+    #[test]
+    fn rejects_a_present_but_empty_session_cookie() {
+        // The name check alone would treat an empty cookie as authenticated;
+        // the non-empty value check is what makes this guard meaningful.
+        assert!(session_cookie_is_valid("dsh-auth-test", "dsh-auth-test", "session-token"));
+        assert!(!session_cookie_is_valid("dsh-auth-test", "dsh-auth-test", ""));
+        assert!(!session_cookie_is_valid("other-cookie", "dsh-auth-test", "session-token"));
     }
 }

@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "desktop-local-bootstrap",
-  "description": "Only the bundled bootstrap page can use Tauri core APIs. The Harness HTTP origin receives no IPC permissions.",
-  "webviews": ["main"],
+  "description": "Only the bundled local pages (bootstrap shell and the version panel) can use Tauri core APIs. The Harness HTTP origin receives no IPC permissions.",
+  "webviews": ["main", "info"],
   "local": true,
   "permissions": [
     "core:default",

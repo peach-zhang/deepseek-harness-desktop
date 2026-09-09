@@ -24,6 +24,7 @@ if (!root) {
 const appRoot: HTMLElement = root
 
 let retrying = false
+let infoOpen = false
 
 const win = getCurrentWindow()
 
@@ -101,6 +102,9 @@ function render(status: BackendStatus): void {
     <div class="titlebar" data-tauri-drag-region>
       <span class="titlebar__title" data-tauri-drag-region>DSH Desktop</span>
       <div class="titlebar__controls">
+        <button class="titlebar__btn titlebar__btn--info${infoOpen ? ' is-active' : ''}" id="win-info" aria-label="版本信息" aria-expanded="${infoOpen}">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.3" /><circle cx="8" cy="4.9" r="0.95" fill="currentColor" /><path d="M8 7.1v4.1" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" /></svg>
+        </button>
         <button class="titlebar__btn" id="win-minimize" aria-label="最小化">
           <img class="icon-minimize-img" src="${titlebarIcons().minimize}" width="12" height="12" alt="" />
         </button>
@@ -147,6 +151,9 @@ function render(status: BackendStatus): void {
 }
 
 function wireTitlebar(): void {
+  document.querySelector<HTMLButtonElement>('#win-info')?.addEventListener('click', () => {
+    void toggleInfo()
+  })
   document.querySelector<HTMLButtonElement>('#win-minimize')?.addEventListener('click', () => {
     void win.minimize()
   })
@@ -156,6 +163,28 @@ function wireTitlebar(): void {
   document.querySelector<HTMLButtonElement>('#win-close')?.addEventListener('click', () => {
     void win.close()
   })
+}
+
+/**
+ * Opens or closes the version panel. The panel is a child WebView owned by the
+ * Rust side, so its open/closed state is authoritative there; the returned
+ * value and the `desktop-info` event both feed the same button state.
+ */
+async function toggleInfo(): Promise<void> {
+  try {
+    applyInfoState(await invoke<boolean>('toggle_desktop_info'))
+  } catch (error) {
+    console.error('toggle version panel failed', error)
+  }
+}
+
+function applyInfoState(open: boolean): void {
+  infoOpen = open
+  const button = document.querySelector<HTMLButtonElement>('#win-info')
+  if (button) {
+    button.classList.toggle('is-active', open)
+    button.setAttribute('aria-expanded', String(open))
+  }
 }
 
 function applyStatus(status: BackendStatus): void {
@@ -196,6 +225,10 @@ async function bootstrap(): Promise<void> {
 
   await listen<{ preference: string }>('harness-theme', (event) => {
     applyHarnessTheme(event.payload.preference)
+  })
+
+  await listen<boolean>('desktop-info', (event) => {
+    applyInfoState(event.payload)
   })
 
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {

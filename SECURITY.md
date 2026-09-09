@@ -21,8 +21,8 @@ or an unpatched exploit.
 - The launch token is never sent through frontend IPC and is redacted from logs.
 - 本地壳层只能导航到 bootstrap origin，Harness 子 WebView 只能导航到当前活动的
   `127.0.0.1:<port>` origin，两者不能互相跳转。
-- Tauri IPC capability 仅授予本地 `main` WebView，不按整个窗口授权；
-  Harness 子 WebView 及远程 origin 均不获得 Tauri IPC 权限。
+- Tauri IPC capability 仅授予本地 `main` 与 `info` 两个 WebView（启动壳层与版本信息面板），
+  不按整个窗口授权；Harness 子 WebView 及远程 origin 均不获得 Tauri IPC 权限。
 - Harness and model data live under the operating system's per-user app-data
   directory.
 - Telemetry is disabled by the wrapper unless a future release exposes an

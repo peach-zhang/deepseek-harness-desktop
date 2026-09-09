@@ -14,7 +14,7 @@ install Node.js or run `npx @deepseek-ai/dsh web`.
 
 ## Download
 
-**Current release: [DSH Desktop v0.1.15](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.15)**
+**Current release: [DSH Desktop v0.1.16](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.16)**
 
 Windows x64 and macOS installers are available from the
 [Latest Release](https://github.com/peach-zhang/deepseek-harness-desktop/releases/latest)
@@ -28,6 +28,11 @@ for managed Windows deployments.
 DSH Desktop starts a private Harness server on a random `127.0.0.1` port, waits for
 its official readiness signal, and opens the built-in Web UI. Closing the app
 also stops the Harness process.
+
+The info button at the right of the title bar opens a version panel showing the
+desktop shell version, the running Harness version, the last update check and
+first launch timestamps, and the Harness versions installed on this machine
+(kept in `<app data dir>/dsh-desktop.db`).
 
 ## What gets bundled
 
@@ -109,13 +114,14 @@ committed.
 ## Publishing a GitHub Release
 
 1. Push this repository to GitHub with the default branch named `main`.
-2. Update the version in `package.json`, `src-tauri/Cargo.toml`, and
-   `src-tauri/tauri.conf.json`.
+2. Update the version in `package.json`, `src-tauri/Cargo.toml`,
+   `src-tauri/tauri.conf.json`, and `runtime/package.json` (plus its lockfile
+   and `src-tauri/Cargo.lock`).
 3. Commit and push a matching tag, for example:
 
 ```bash
-git tag v0.1.15
-git push origin v0.1.15
+git tag v0.1.16
+git push origin v0.1.16
 ```
 
 The release workflow builds these targets on native GitHub-hosted runners:

@@ -35,6 +35,7 @@ pub fn run() {
             backend::commands::backend_status,
             backend::commands::restart_backend,
             commands::get_desktop_info,
+            commands::toggle_desktop_info,
             theme::get_harness_theme,
         ])
         .setup(move |app| {

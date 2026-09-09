@@ -14,7 +14,7 @@ Harness 及其 Web UI 均已内置，无需安装 Node.js，也不需要手动�
 
 ## 下载
 
-**当前版本：[DSH Desktop v0.1.15](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.15)**
+**当前版本：[DSH Desktop v0.1.16](https://github.com/peach-zhang/deepseek-harness-desktop/releases/tag/v0.1.16)**
 
 Windows x64 和 macOS 安装包统一从
 [最新版下载页面](https://github.com/peach-zhang/deepseek-harness-desktop/releases/latest)
@@ -25,6 +25,10 @@ Windows x64 和 macOS 安装包统一从
 
 DSH Desktop 启动后会在随机的 `127.0.0.1` 本地端口运行 Harness 服务，
 等待服务正式就绪后打开内置 Web UI。关闭桌面应用时，Harness 进程也会一并停止。
+
+标题栏右侧的信息按钮可以打开版本信息面板：其中显示桌面壳版本、当前 Harness 版本、
+上次更新检查与首次启动时间，以及本机安装过的 Harness 版本历史（保存在
+`<应用数据目录>/dsh-desktop.db`）。
 
 ## 安装包包含的组件
 
@@ -96,13 +100,14 @@ pnpm build:desktop
 ## 发布 GitHub Release
 
 1. 将仓库推送到 GitHub，并确保默认分支名为 `main`。
-2. 同步更新 `package.json`、`src-tauri/Cargo.toml` 和
-   `src-tauri/tauri.conf.json` 中的版本号。
+2. 同步更新 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`
+   和 `runtime/package.json` 中的版本号（以及 `runtime/package-lock.json`、
+   `src-tauri/Cargo.lock` 中的对应条目）。
 3. 创建并推送相同版本的标签，例如：
 
 ```bash
-git tag v0.1.15
-git push origin v0.1.15
+git tag v0.1.16
+git push origin v0.1.16
 ```
 
 GitHub Actions 会在官方托管的原生运行器上构建以下目标：

@@ -53,9 +53,10 @@ pub(crate) use install::{UpdateStage, UPDATE_STAGE_TOTAL};
 /// still holds a handle on a file inside the tree. A short retry loop is
 /// usually enough to let the competing handle drain.
 ///
-/// On the first sharing-violation failure we also attempt to kill any orphaned
-/// `node.exe` processes. This catches leftover children from a previous backend
-/// that didn't exit cleanly.
+/// The retry loop only waits; it never terminates other processes. Orphaned
+/// Node.js children are the backend's responsibility (`backend::stop_child`
+/// kills the whole process tree), so a leaked handle here surfaces as a logged
+/// warning rather than being resolved by force.
 ///
 /// On non-Windows platforms this is a thin wrapper around [`fs::remove_dir_all`]
 /// (no retries needed because Unix uses inode-based semantics).

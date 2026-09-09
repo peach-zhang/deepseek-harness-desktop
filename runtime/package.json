@@ -1,8 +1,8 @@
 {
   "name": "deepseek-harness-desktop-runtime",
-  "version": "0.1.2",
+  "version": "0.1.16",
   "private": true,
-  "description": "Pinned production dependency tree bundled by DSH Desktop",
+  "description": "Dependency container used only to pin the Harness tree bundled by DSH Desktop. Its version mirrors the wrapper version and is not read at runtime; the bundled Harness version lives in the HARNESS_VERSION file.",
   "dependencies": {
     "@deepseek-ai/dsh": "0.1.0-rc.7"
   }
