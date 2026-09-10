@@ -66,4 +66,19 @@ describe('版本信息面板契约', () => {
     expect(backend).toContain('crate::commands::reopen_info_panel_above_harness(app)')
     expect(backend).toContain('crate::commands::close_info_panel(app)')
   })
+
+  it('切换前先采样面板状态，否则关闭后会立刻被重建', () => {
+    const commands = source('../src-tauri/src/commands.rs')
+    const toggle = commands.slice(commands.indexOf('pub(crate) async fn toggle_desktop_info'))
+    const sample = toggle.indexOf('let was_open = is_info_open(&app);')
+    const close = toggle.indexOf('close_info_panel(&app)')
+    const create = toggle.indexOf('let builder =')
+    // Webview::close 会同步注销面板，关闭后再查 get_webview 只会得到 None，
+    // 所以打开状态必须在关闭之前采样。
+    expect(sample).toBeGreaterThan(-1)
+    expect(sample).toBeLessThan(close)
+    expect(close).toBeLessThan(create)
+    expect(toggle).toContain('if was_open {')
+    expect(toggle).not.toContain('if app.get_webview(INFO_WEBVIEW).is_some()')
+  })
 })

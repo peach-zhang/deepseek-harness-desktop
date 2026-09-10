@@ -57,6 +57,9 @@ fn emit_info_state(app: &AppHandle, open: bool) {
 ///
 /// Used by [`toggle_desktop_info`] and when the window layout is restored to
 /// the bootstrap page, where the panel has no meaning.
+///
+/// On success the panel is unregistered synchronously, so [`is_info_open`]
+/// reports `false` as soon as this returns.
 pub(crate) fn close_info_panel(app: &AppHandle) -> bool {
     let Some(webview) = app.get_webview(INFO_WEBVIEW) else {
         return true;
@@ -86,12 +89,17 @@ pub(crate) fn close_info_panel(app: &AppHandle) -> bool {
 /// Returns `true` when the panel is open after the call.
 #[tauri::command]
 pub(crate) async fn toggle_desktop_info(app: AppHandle) -> Result<bool, String> {
+    // 必须在关闭之前采样打开状态：`Webview::close` 会同步地把面板从 Tauri 的
+    // WebView 管理器里移除，运行时也会把它从窗口的子 WebView 列表里删掉。因此
+    // 关闭之后再查 `get_webview(INFO_WEBVIEW)` 永远得到 `None`，把它当作
+    // "刚才是否打开" 会立刻重建刚被关掉的面板，表现为面板无法关闭。
+    let was_open = is_info_open(&app);
     // A panel that cannot be closed must not be re-created under the same
     // label; surface the failure instead.
     if !close_info_panel(&app) {
         return Err("无法关闭版本信息面板。".to_owned());
     }
-    if app.get_webview(INFO_WEBVIEW).is_some() {
+    if was_open {
         // It was already open and has now been closed.
         return Ok(false);
     }
@@ -135,6 +143,8 @@ pub(crate) fn reopen_info_panel_above_harness(app: &AppHandle) {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        // 关闭后管理器里已经没有该 WebView，随后 toggle 会把它重新创建一次，
+        // 从而以新的创建顺序排在 Harness 之上。
         close_info_panel(&app);
         if let Err(error) = toggle_desktop_info(app.clone()).await {
             log::warn!("failed to restore version panel above Harness: {error}");
