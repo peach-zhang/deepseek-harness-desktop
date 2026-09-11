@@ -67,6 +67,20 @@ describe('版本信息面板契约', () => {
     expect(backend).toContain('crate::commands::close_info_panel(app)')
   })
 
+  it('面板不绘制原生滚动条，但内容仍可滚动', () => {
+    const css = source('./styles.css')
+    // The panel is a 340px overlay: a Windows scrollbar covered the values it
+    // was meant to reveal, so the bar is suppressed on every scrolling box.
+    expect(css).toMatch(
+      /body\[data-page='info'\],\s*body\[data-page='info'\] \*\s*\{[^}]*scrollbar-width:\s*none/s,
+    )
+    expect(css).toContain("-ms-overflow-style: none")
+    expect(css).toContain("body[data-page='info'] ::-webkit-scrollbar")
+    const body = css.match(/\.info-body\s*\{[^}]*\}/s)?.[0] ?? ''
+    expect(body).toContain('overflow-y: auto')
+    expect(body).toContain('overscroll-behavior: contain')
+  })
+
   it('切换前先采样面板状态，否则关闭后会立刻被重建', () => {
     const commands = source('../src-tauri/src/commands.rs')
     const toggle = commands.slice(commands.indexOf('pub(crate) async fn toggle_desktop_info'))

@@ -79,6 +79,22 @@ body[data-page='info'] #info-root {
   background: transparent;
 }
 
+/* The panel stays scrollable with the wheel/trackpad but never paints a native
+   scrollbar: at 340px wide the Windows overlay scrollbar covered the version
+   values, and the panel is small enough that the bar is pure noise. */
+body[data-page='info'],
+body[data-page='info'] * {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+body[data-page='info']::-webkit-scrollbar,
+body[data-page='info'] ::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
 button,
 input {
   font: inherit;
@@ -454,6 +470,9 @@ body[data-page='info'] {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* Without a visible scrollbar, a keyboard/wheel overshoot must not chain to
+     the document behind the panel. */
+  overscroll-behavior: contain;
   padding: 12px 14px 14px;
 }
 
