@@ -1,5 +1,6 @@
 import { escapeHtml, updateProgress } from './bootstrap-utils'
 import { HARNESS_VERSION } from './generated-version'
+import { subscribeTheme } from './theme'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -35,18 +36,9 @@ const win = getCurrentWindow()
 const FALLBACK_HARNESS_VERSION = HARNESS_VERSION
 
 // ── Harness theme sync ──
-// The bootstrap theme preference arrives from the Rust side while this local
-// document is active. 'system' is resolved here against the OS color scheme.
-
-let harnessThemePreference = 'system'
-
-function applyHarnessTheme(preference: string): void {
-  harnessThemePreference = preference
-  const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-  const dark = preference === 'dark' || (preference === 'system' && systemDark)
-  document.documentElement.dataset.theme = dark ? 'dark' : 'light'
-  updateTitlebarIcons()
-}
+// The shared `./theme` module resolves the preference, sets `data-theme` on this
+// document and keeps it live; the titlebar icons are the only part that is
+// specific to the bootstrap document.
 
 function isDarkTheme(): boolean {
   return document.documentElement.dataset.theme === 'dark'
@@ -223,26 +215,17 @@ async function bootstrap(): Promise<void> {
     applyStatus(event.payload)
   })
 
-  await listen<{ preference: string }>('harness-theme', (event) => {
-    applyHarnessTheme(event.payload.preference)
-  })
-
   await listen<boolean>('desktop-info', (event) => {
     applyInfoState(event.payload)
   })
 
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-    if (harnessThemePreference === 'system') {
-      applyHarnessTheme('system')
-    }
+  // Single source of truth for the theme: `./theme` owns the initial read, the
+  // live `harness-theme` events and the OS listener.
+  await subscribeTheme(() => {
+    // Applying `data-theme` restyles the titlebar through CSS custom
+    // properties; only the icon assets need swapping by hand.
+    updateTitlebarIcons()
   })
-
-  try {
-    const theme = await invoke<{ preference: string }>('get_harness_theme')
-    applyHarnessTheme(theme.preference)
-  } catch {
-    // Keep the default light theme if the preference cannot be read yet.
-  }
 
   void win.onResized(async () => {
     await updateMaximizeIcon()

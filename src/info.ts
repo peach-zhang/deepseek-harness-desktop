@@ -8,6 +8,7 @@
  */
 import { escapeHtml } from './bootstrap-utils'
 import { renderInfoBody, type DesktopInfo } from './info-utils'
+import { subscribeTheme } from './theme'
 import { invoke } from '@tauri-apps/api/core'
 import './styles.css'
 
@@ -56,6 +57,14 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     void close()
   }
+})
+
+// The panel is its own document, so it must resolve the Harness theme itself;
+// otherwise it keeps using the light design tokens while the rest of the shell
+// switches to dark.
+void subscribeTheme(() => {
+  // Applying `data-theme` restyles the panel through CSS custom properties, so
+  // no re-render is needed here.
 })
 
 void load()
