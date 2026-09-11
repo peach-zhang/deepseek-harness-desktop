@@ -28,6 +28,14 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 const NPM_PACKAGE: &str = "npm";
 const NPM_CLI_VERSION: &str = "11.17.0";
+/// The Harness package this app installs and updates.
+const NPM_PACKAGE_TARGET: &str = "@deepseek-ai/dsh";
+/// Prefer cached tarballs when available (e.g. repeated launches or prior
+/// partial installs). npm falls back to the network automatically on a cache
+/// miss, and revalidates expired metadata, so this is a pure optimisation on
+/// the first attempt. The retry drops it in favour of `--prefer-online` to make
+/// sure metadata is refetched (see `run_npm_install_with_retry`).
+const PREFER_OFFLINE_ARGS: &[&str] = &["--prefer-offline"];
 pub(crate) const UPDATE_STAGE_TOTAL: usize = 4;
 pub(crate) const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(180);
 /// Maximum wall-clock time for `npm install`.  The Harness package has 120+
@@ -133,6 +141,7 @@ pub(crate) fn install_updated_runtime(
     registry: &str,
     agent: &ureq::Agent,
     target: &Version,
+    tarball: Option<&str>,
     notify: &mut dyn FnMut(super::UpdateNotice),
 ) -> Result<RuntimeSelection, String> {
     use super::UpdateNotice;
@@ -165,7 +174,9 @@ pub(crate) fn install_updated_runtime(
             target: version.clone(),
         });
         log::debug!("starting npm install -g for Harness {version}");
-        run_npm_install(node, &npm_cli, &staging, &cache, registry, &version)?;
+        install_harness_package(
+            node, &npm_cli, &staging, &cache, registry, &version, tarball,
+        )?;
         log::debug!("npm install completed, verifying staged entry");
 
         let staged_entry = runtime_entry(&staging);
@@ -212,20 +223,214 @@ pub(crate) fn install_updated_runtime(
     result
 }
 
-fn run_npm_install(
+/// Why an `npm install` attempt failed, as far as the app is concerned.
+///
+/// Only [`NpmInstallKind::TargetNotFound`] is worth a retry: it means npm
+/// resolved *some* packument for the package that did not contain the version
+/// we asked for. Any other failure — a network outage, a disk error — is not
+/// fixed by re-resolving metadata.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NpmInstallKind {
+    /// npm exited with its `ETARGET`/"No matching version found" error.
+    TargetNotFound,
+    /// Anything else (non-zero exit without the ETARGET marker).
+    Other,
+}
+
+/// The signature npm prints for a package version it could not resolve. It
+/// appears verbatim in stderr at `--loglevel=verbose`.
+const ETARGET_MARKER: &str = "No matching version found for";
+
+fn npm_failure_kind(stderr: &str) -> NpmInstallKind {
+    if stderr.contains("ETARGET") || stderr.contains(ETARGET_MARKER) {
+        NpmInstallKind::TargetNotFound
+    } else {
+        NpmInstallKind::Other
+    }
+}
+
+/// Builds npm's cacache key for a package's packument.
+///
+/// npm keys registry metadata as `make-fetch-happen:request-cache:<url>` with
+/// the scope separator percent-encoded (`@scope/name` → `@scope%2Fname`).
+pub(crate) fn packument_cache_key(registry: &str, name: &str) -> String {
+    let encoded = name.replace('/', "%2F");
+    format!(
+        "make-fetch-happen:request-cache:{}/{}",
+        registry.trim_end_matches('/'),
+        encoded
+    )
+}
+
+/// npm has written the scope separator both uppercased (`%2F`) and lowercased
+/// (`%2f`) across versions, and `npm cache clean` matches the key byte for
+/// byte, so both spellings of the package name must be purged. Note that
+/// `str::to_ascii_lowercase` is *not* enough here: it would leave `%2F` intact.
+const PURGE_NAME_VARIANTS: [&str; 2] = [NPM_PACKAGE_TARGET, "@deepseek-ai%2fdsh"];
+
+/// Drops npm's cached packument for `name` so the next install must refetch
+/// metadata from the registry.
+///
+/// This is the repair step for a stale-metadata failure. `npm cache clean`
+/// rewrites the cacache index while holding npm's own lock, so it is safe to
+/// run against the shared cache directory; failures are logged and ignored
+/// because the retry is still worth attempting without the purge.
+fn purge_packument_cache(node: &Path, npm_cli: &Path, cache: &Path, registry: &str) {
+    for name in PURGE_NAME_VARIANTS {
+        let key = packument_cache_key(registry, name);
+        log::debug!("purging cached packument: {key}");
+        let mut cmd = Command::new(node);
+        cmd.arg(npm_cli)
+            .args(["cache", "clean", &key, "--force"])
+            .arg(format!("--cache={}", cache.display()))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        match cmd.output() {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let deleted = stdout.lines().any(|line| line.starts_with("Deleted:"));
+                if deleted {
+                    log::debug!("npm cache purge removed the stale packument");
+                } else {
+                    log::debug!("npm cache purge found no matching packument entry");
+                }
+            }
+            Ok(output) => log::warn!(
+                "npm cache purge exited with {:?}: {}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+            Err(error) => log::warn!("failed to run npm cache purge: {error}"),
+        }
+    }
+}
+
+/// Installs the Harness package into `staging`, preferring the exact tarball
+/// URL carried by the packument the update check already fetched.
+///
+/// Installing from the tarball URL is the primary strategy because it never
+/// asks the registry to resolve a *name@version* — the packument lookup that
+/// failed in the field. The registry (and any CDN in front of it) can keep
+/// serving a packument that predates a just-published release for tens of
+/// minutes even while the tarball itself is already downloadable, which leaves
+/// `npm install @deepseek-ai/dsh@<new>` failing with `ETARGET` while the app's
+/// own metadata fetch correctly reports the version as available. Going
+/// straight to the tarball sidesteps that inconsistency entirely.
+///
+/// The version-spec path remains as the fallback for when no tarball URL is
+/// available, and it retries once with a purged packument cache because the
+/// stale metadata can also live in npm's own cache.
+#[allow(clippy::too_many_arguments)]
+fn install_harness_package(
     node: &Path,
     npm_cli: &Path,
     staging: &Path,
     cache: &Path,
     registry: &str,
     version: &str,
+    tarball: Option<&str>,
 ) -> Result<(), String> {
+    if let Some(url) = tarball {
+        log::debug!("installing Harness {version} from its tarball URL: {url}");
+        match run_npm_install_with_retry(node, npm_cli, staging, cache, registry, url, "tarball") {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                log::warn!(
+                    "installing Harness {version} from its tarball URL failed ({error}); \
+                     falling back to resolving {NPM_PACKAGE_TARGET}@{version}"
+                );
+                clear_staging(staging)?;
+            }
+        }
+    }
+
+    let spec = format!("{NPM_PACKAGE_TARGET}@{version}");
+    run_npm_install_with_retry(
+        node,
+        npm_cli,
+        staging,
+        cache,
+        registry,
+        &spec,
+        "version spec",
+    )
+}
+
+/// Empties the staging tree so the next install attempt starts clean. A failed
+/// attempt can leave a half-built `node_modules` behind.
+fn clear_staging(staging: &Path) -> Result<(), String> {
+    if staging.exists() {
+        super::remove_dir_all_retried(staging)
+            .map_err(|error| format!("无法清理更新暂存目录:{error}"))?;
+    }
+    fs::create_dir_all(staging).map_err(|error| format!("无法创建更新暂存目录:{error}"))
+}
+
+/// Runs `npm install` for `spec`, and retries once without the local metadata
+/// cache when npm reports that the requested version does not exist.
+///
+/// `spec` is either `@deepseek-ai/dsh@<version>` or a direct tarball URL; only
+/// the former depends on packument resolution, so only it can produce an
+/// `ETARGET` worth repairing here.
+#[allow(clippy::too_many_arguments)]
+fn run_npm_install_with_retry(
+    node: &Path,
+    npm_cli: &Path,
+    staging: &Path,
+    cache: &Path,
+    registry: &str,
+    spec: &str,
+    label: &str,
+) -> Result<(), String> {
+    match run_npm_install(node, npm_cli, staging, cache, registry, spec, false) {
+        Ok(()) => Ok(()),
+        Err((NpmInstallKind::Other, error)) => Err(error),
+        Err((NpmInstallKind::TargetNotFound, error)) => {
+            log::warn!(
+                "npm could not resolve {spec} from {registry} ({error}); \
+                 discarding the cached packument and retrying with --prefer-online"
+            );
+            purge_packument_cache(node, npm_cli, cache, registry);
+            clear_staging(staging)?;
+
+            match run_npm_install(node, npm_cli, staging, cache, registry, spec, true) {
+                Ok(()) => {
+                    log::info!(
+                        "Harness {label} installed via {registry} after discarding stale metadata"
+                    );
+                    Ok(())
+                }
+                Err((_, retry_error)) => Err(format!("{error} 重试后仍失败：{retry_error}")),
+            }
+        }
+    }
+}
+
+/// Runs a single `npm install` attempt.
+///
+/// Returns the classified failure kind alongside a display message so the
+/// caller can decide whether a metadata refresh is worth retrying.
+#[allow(clippy::too_many_arguments)]
+fn run_npm_install(
+    node: &Path,
+    npm_cli: &Path,
+    staging: &Path,
+    cache: &Path,
+    registry: &str,
+    spec: &str,
+    prefer_online: bool,
+) -> Result<(), (NpmInstallKind, String)> {
     log::debug!(
-        "npm install: node={} npm_cli={} staging={} registry={}",
+        "npm install: node={} npm_cli={} staging={} registry={} spec={} prefer_online={}",
         node.display(),
         npm_cli.display(),
         staging.display(),
         registry,
+        spec,
+        prefer_online,
     );
 
     let mut cmd = Command::new(node);
@@ -249,18 +454,18 @@ fn run_npm_install(
             // like `--loglevel`/`--prefix`/`--registry`, so passing them as
             // separate array entries misparses the entire argument chain.
             "--loglevel=verbose",
-            // Prefer cached tarballs when available (e.g. repeated launches
-            // or prior partial installs).  Falls back to the network
-            // automatically when the cache misses.
-            "--prefer-offline",
+        ])
+        .args(PREFER_OFFLINE_ARGS)
+        .args([
             // Retry transient network failures instead of hanging silently.
             "--fetch-retries=3",
             &format!("--prefix={}", staging.display()),
             &format!("--registry={}", registry),
-            // Install the Harness package directly rather than through a
-            // package.json dependency — global mode doesn't read
-            // package.json for the install target list.
-            &format!("@deepseek-ai/dsh@{version}"),
+            // The install target: either `@deepseek-ai/dsh@<version>` or a
+            // direct tarball URL. Passing it as a positional argument is
+            // required — global mode doesn't read package.json for the
+            // install target list.
+            spec,
         ])
         .current_dir(staging)
         .env("npm_config_cache", cache)
@@ -277,15 +482,21 @@ fn run_npm_install(
         // doesn't block the whole install indefinitely.  120s per request
         // is generous enough for large tarballs on slow connections.
         .env("npm_config_fetch_timeout", "120000")
-        .env("npm_config_fetch_retry_mintimeout", "20000")
-        .stdin(Stdio::null())
+        .env("npm_config_fetch_retry_mintimeout", "20000");
+    if prefer_online {
+        cmd.env("npm_config_prefer_online", "true");
+    }
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    let mut child = cmd
-        .spawn()
-        .map_err(|error| format!("无法启动 npm 安装进程:{error}"))?;
+    let mut child = cmd.spawn().map_err(|error| {
+        (
+            NpmInstallKind::Other,
+            format!("无法启动 npm 安装进程:{error}"),
+        )
+    })?;
 
     // Drain npm's stdout in a background thread. npm writes its summary
     // ("added N packages in Xs") to stdout; we log it so we can see what
@@ -301,18 +512,25 @@ fn run_npm_install(
         }
     });
 
-    // Drain npm's stderr in a background thread. npm writes warnings and
-    // progress information to stderr; capturing it lets us see what's
-    // happening when the install hangs.
+    // Drain npm's stderr in a background thread. npm writes warnings,
+    // progress information *and* its fatal errors to stderr, so the text is
+    // both logged and kept on hand to classify the failure once the child
+    // exits (see `npm_failure_kind`).
     let stderr_handle = child.stderr.take();
     let stderr_thread = std::thread::spawn(move || {
+        let mut collected = String::new();
         if let Some(stderr) = stderr_handle {
             use std::io::BufRead;
             let reader = std::io::BufReader::new(stderr);
             for line in reader.lines().map_while(Result::ok) {
                 log::debug!(target: "dsh", "[npm:err] {line}");
+                if !collected.is_empty() {
+                    collected.push('\n');
+                }
+                collected.push_str(&line);
             }
         }
+        collected
     });
 
     let started = Instant::now();
@@ -330,13 +548,23 @@ fn run_npm_install(
             Ok(Some(status)) => {
                 let elapsed = started.elapsed();
                 let _ = stdout_thread.join();
-                let _ = stderr_thread.join();
-                return Err(format!(
-                    "npm install 失败（退出码 {}，耗时 {:.1}s）。",
-                    status
-                        .code()
-                        .map_or("未知".to_owned(), |code| code.to_string()),
-                    elapsed.as_secs_f64(),
+                let stderr = stderr_thread.join().unwrap_or_default();
+                let kind = npm_failure_kind(&stderr);
+                if kind == NpmInstallKind::TargetNotFound {
+                    log::warn!(
+                        "npm reported the requested version as missing; last stderr line: {}",
+                        stderr.lines().last().unwrap_or("(no stderr)")
+                    );
+                }
+                return Err((
+                    kind,
+                    format!(
+                        "npm install 失败（退出码 {}，耗时 {:.1}s）。",
+                        status
+                            .code()
+                            .map_or("未知".to_owned(), |code| code.to_string()),
+                        elapsed.as_secs_f64(),
+                    ),
                 ));
             }
             Ok(None) => {
@@ -349,7 +577,7 @@ fn run_npm_install(
                     let _ = child.wait();
                     let _ = stdout_thread.join();
                     let _ = stderr_thread.join();
-                    return Err("npm install 超时。".into());
+                    return Err((NpmInstallKind::Other, "npm install 超时。".into()));
                 }
                 if last_progress.elapsed() >= progress_interval {
                     log::debug!(
@@ -363,7 +591,10 @@ fn run_npm_install(
             Err(error) => {
                 let _ = stdout_thread.join();
                 let _ = stderr_thread.join();
-                return Err(format!("无法等待 npm 安装进程:{error}"));
+                return Err((
+                    NpmInstallKind::Other,
+                    format!("无法等待 npm 安装进程:{error}"),
+                ));
             }
         }
     }
@@ -473,5 +704,79 @@ mod tests {
     fn rejects_traversal_in_npm_archives() {
         assert!(safe_archive_path(Path::new("bin/npm-cli.js")));
         assert!(!safe_archive_path(Path::new("../escape")));
+    }
+
+    #[test]
+    fn classifies_npm_failures() {
+        // The exact stderr npm produced when a stale packument omitted the
+        // requested version (npm 11.17.0, --loglevel=verbose).
+        let etarget = "npm http fetch GET 200 https://registry.npmjs.org/@deepseek-ai%2fdsh 15ms (cache stale)\n\
+             npm error code ETARGET\n\
+             npm error notarget No matching version found for @deepseek-ai/dsh@0.1.5-rc.1.";
+        assert_eq!(
+            npm_failure_kind(etarget),
+            NpmInstallKind::TargetNotFound,
+            "a stale packument must be recognised so the install is retried"
+        );
+        // The marker alone is enough (npm prints it without the `ETARGET`
+        // code line when the error is formatted differently).
+        assert_eq!(
+            npm_failure_kind("No matching version found for @deepseek-ai/dsh@1.0.0"),
+            NpmInstallKind::TargetNotFound
+        );
+
+        // Unrelated failures must not trigger a metadata purge + retry.
+        assert_eq!(
+            npm_failure_kind("npm error code EAI_AGAIN\nnpm error network request failed"),
+            NpmInstallKind::Other
+        );
+        assert_eq!(npm_failure_kind(""), NpmInstallKind::Other);
+    }
+
+    #[test]
+    fn builds_packument_cache_keys() {
+        assert_eq!(
+            packument_cache_key("https://registry.npmmirror.com", NPM_PACKAGE_TARGET),
+            "make-fetch-happen:request-cache:https://registry.npmmirror.com/@deepseek-ai%2Fdsh"
+        );
+        assert_eq!(
+            packument_cache_key("https://registry.npmjs.org", NPM_PACKAGE_TARGET),
+            "make-fetch-happen:request-cache:https://registry.npmjs.org/@deepseek-ai%2Fdsh"
+        );
+        // A trailing slash on the registry must not double up.
+        assert_eq!(
+            packument_cache_key("https://registry.npmjs.org/", NPM_PACKAGE_TARGET),
+            "make-fetch-happen:request-cache:https://registry.npmjs.org/@deepseek-ai%2Fdsh"
+        );
+    }
+
+    #[test]
+    fn builds_packument_cache_keys_without_duplicated_slashes() {
+        assert_eq!(
+            packument_cache_key("https://registry.npmjs.org", NPM_PACKAGE_TARGET),
+            "make-fetch-happen:request-cache:https://registry.npmjs.org/@deepseek-ai%2Fdsh"
+        );
+        // A trailing slash on the registry must not double up.
+        assert_eq!(
+            packument_cache_key("https://registry.npmjs.org/", NPM_PACKAGE_TARGET),
+            "make-fetch-happen:request-cache:https://registry.npmjs.org/@deepseek-ai%2Fdsh"
+        );
+    }
+
+    #[test]
+    fn purge_covers_both_scope_encodings() {
+        // The two keys npm has used for the same packument. The second entry
+        // must be spelled out, because `to_ascii_lowercase` would leave `%2F`
+        // intact and silently purge the same key twice.
+        assert_ne!(PURGE_NAME_VARIANTS[0], PURGE_NAME_VARIANTS[1]);
+        assert_eq!(
+            packument_cache_key("https://registry.npmjs.org", PURGE_NAME_VARIANTS[1]),
+            "make-fetch-happen:request-cache:https://registry.npmjs.org/@deepseek-ai%2fdsh"
+        );
+        let lowercased = PURGE_NAME_VARIANTS[0].to_ascii_lowercase();
+        assert_eq!(
+            lowercased, PURGE_NAME_VARIANTS[0],
+            "the guard case: lowercasing the name does not change the escape"
+        );
     }
 }

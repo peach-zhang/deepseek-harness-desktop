@@ -86,6 +86,24 @@ pub(crate) fn latest_candidate(metadata: &Value) -> Option<Version> {
         .max()
 }
 
+/// The tarball URL a packument advertises for one specific version.
+///
+/// The update install prefers downloading this URL directly: it avoids asking
+/// the registry to resolve `name@version` a second time, which is the lookup
+/// that fails when a registry serves a packument predating a just-published
+/// release. `None` means the packument has no usable URL for that version, and
+/// the caller should fall back to the normal version-spec install.
+pub(crate) fn tarball_url(metadata: &Value, version: &Version) -> Option<String> {
+    metadata
+        .get("versions")?
+        .get(version.to_string())?
+        .get("dist")?
+        .get("tarball")?
+        .as_str()
+        .map(str::to_owned)
+        .filter(|url| !url.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,6 +163,27 @@ mod tests {
         assert_eq!(
             registries_with_official_fallback(OFFICIAL_REGISTRY.to_owned()),
             vec![OFFICIAL_REGISTRY.to_owned()]
+        );
+    }
+
+    #[test]
+    fn resolves_tarball_url_for_version() {
+        let metadata = json!({
+            "versions": {
+                "0.1.5-rc.1": {
+                    "dist": { "tarball": "https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.1.5-rc.1.tgz" }
+                }
+            }
+        });
+        assert_eq!(
+            tarball_url(&metadata, &Version::parse("0.1.5-rc.1").unwrap()).as_deref(),
+            Some("https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.1.5-rc.1.tgz")
+        );
+        // A version published after this packument was cached has no URL, so
+        // the installer must fall back to the version-spec path.
+        assert_eq!(
+            tarball_url(&metadata, &Version::parse("0.1.5-rc.2").unwrap()),
+            None
         );
     }
 }

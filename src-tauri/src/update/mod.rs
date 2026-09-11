@@ -37,8 +37,8 @@ use semver::Version;
 use crate::runtime::ensure_harness_runtime;
 use install::runtime_paths;
 use registry::{
-    fetch_json, http_agent, latest_candidate, registry_candidates, updates_disabled, CHECK_TIMEOUT,
-    DSH_METADATA_PATH,
+    fetch_json, http_agent, latest_candidate, registry_candidates, tarball_url, updates_disabled,
+    CHECK_TIMEOUT, DSH_METADATA_PATH,
 };
 
 pub(crate) mod install;
@@ -174,7 +174,10 @@ pub(crate) fn select_harness_runtime(
         match fetch_json(&check_agent, &metadata_url) {
             Ok(metadata) => {
                 if let Some(version) = latest_candidate(&metadata) {
-                    candidate = Some((index, version));
+                    // Keep the packument: the install step uses this registry's
+                    // own tarball URL for `version` rather than making npm
+                    // resolve the version a second time.
+                    candidate = Some((index, version, metadata));
                     break;
                 }
                 log::warn!("Harness update metadata from {registry} contains no valid version");
@@ -183,7 +186,7 @@ pub(crate) fn select_harness_runtime(
         }
     }
 
-    let Some((registry_index, candidate)) = candidate else {
+    let Some((registry_index, candidate, metadata)) = candidate else {
         log::warn!("Harness update check failed via every configured registry");
         return Ok(current);
     };
@@ -212,7 +215,13 @@ pub(crate) fn select_harness_runtime(
     let updated = (|| -> Result<RuntimeSelection, String> {
         let node = node_sidecar_path()?;
         let mut failures = Vec::new();
-        for registry in &registries[registry_index..] {
+        for (index, registry) in registries.iter().enumerate().skip(registry_index) {
+            // Only the registry whose metadata produced the candidate can
+            // supply its tarball URL. A fallback registry has to resolve the
+            // version through npm's normal packument lookup.
+            let tarball = (index == registry_index)
+                .then(|| tarball_url(&metadata, &target))
+                .flatten();
             let download_agent = http_agent(install::DOWNLOAD_TIMEOUT);
             match install::install_updated_runtime(
                 &node,
@@ -220,6 +229,7 @@ pub(crate) fn select_harness_runtime(
                 registry,
                 &download_agent,
                 &target,
+                tarball.as_deref(),
                 notify,
             ) {
                 Ok(selection) => return Ok(selection),
@@ -403,12 +413,29 @@ mod tests {
         assert!(cli.is_file());
 
         let version = Version::parse(crate::HARNESS_VERSION).unwrap();
+        // Resolve the tarball URL exactly as the real update path does, so this
+        // test covers the preferred tarball-URL install rather than only the
+        // version-spec fallback.
+        let metadata = fetch_json(&agent, &format!("{registry}/{DSH_METADATA_PATH}"))
+            .expect("registry metadata should be fetchable");
+        let tarball = tarball_url(&metadata, &version);
+        assert!(tarball.is_some(), "registry should advertise a tarball URL");
+
+        // `DSH_TEST_VERSION_SPEC=1` exercises the version-spec fallback (the
+        // path npm can fail as ETARGET) instead of the default tarball path.
+        let tarball = if std::env::var("DSH_TEST_VERSION_SPEC").is_ok() {
+            None
+        } else {
+            tarball
+        };
+
         let selection = install::install_updated_runtime(
             &node,
             &data_dir,
             &registry,
             &agent,
             &version,
+            tarball.as_deref(),
             &mut |_| {},
         )
         .expect("registry install should succeed");
