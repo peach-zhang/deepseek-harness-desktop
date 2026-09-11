@@ -5,7 +5,7 @@ use std::{
     fs,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(windows)]
@@ -30,12 +30,19 @@ const NPM_PACKAGE: &str = "npm";
 const NPM_CLI_VERSION: &str = "11.17.0";
 /// The Harness package this app installs and updates.
 const NPM_PACKAGE_TARGET: &str = "@deepseek-ai/dsh";
-/// Prefer cached tarballs when available (e.g. repeated launches or prior
-/// partial installs). npm falls back to the network automatically on a cache
-/// miss, and revalidates expired metadata, so this is a pure optimisation on
-/// the first attempt. The retry drops it in favour of `--prefer-online` to make
-/// sure metadata is refetched (see `run_npm_install_with_retry`).
-const PREFER_OFFLINE_ARGS: &[&str] = &["--prefer-offline"];
+/// Reuse cached downloads on the first attempt; recovery must explicitly
+/// override offline settings inherited from npmrc or the parent environment.
+fn npm_cache_args(prefer_online: bool) -> &'static [&'static str] {
+    if prefer_online {
+        &[
+            "--prefer-online",
+            "--prefer-offline=false",
+            "--offline=false",
+        ]
+    } else {
+        &["--prefer-offline"]
+    }
+}
 pub(crate) const UPDATE_STAGE_TOTAL: usize = 4;
 pub(crate) const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(180);
 /// Maximum wall-clock time for `npm install`.  The Harness package has 120+
@@ -225,15 +232,16 @@ pub(crate) fn install_updated_runtime(
 
 /// Why an `npm install` attempt failed, as far as the app is concerned.
 ///
-/// Only [`NpmInstallKind::TargetNotFound`] is worth a retry: it means npm
-/// resolved *some* packument for the package that did not contain the version
-/// we asked for. Any other failure — a network outage, a disk error — is not
-/// fixed by re-resolving metadata.
+/// Stale metadata and missing/corrupt cached content can be recovered by
+/// retrying with a fresh cache. Unrelated filesystem/network errors are left
+/// to the caller's registry fallback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NpmInstallKind {
     /// npm exited with its `ETARGET`/"No matching version found" error.
     TargetNotFound,
-    /// Anything else (non-zero exit without the ETARGET marker).
+    /// Missing cached content or an integrity mismatch worth one fresh download.
+    CacheCorrupt,
+    /// Anything else (permissions, network errors, missing install files, etc.).
     Other,
 }
 
@@ -242,70 +250,64 @@ enum NpmInstallKind {
 const ETARGET_MARKER: &str = "No matching version found for";
 
 fn npm_failure_kind(stderr: &str) -> NpmInstallKind {
-    if stderr.contains("ETARGET") || stderr.contains(ETARGET_MARKER) {
+    let normalized = stderr.replace('\\', "/");
+    if normalized.lines().any(|line| {
+        let Some(error) = line
+            .strip_prefix("npm error ")
+            .or_else(|| line.strip_prefix("npm ERR! "))
+        else {
+            return false;
+        };
+        // Integrity failures often omit the cache path altogether. One fresh
+        // download is safe; a persistent upstream mismatch still fails.
+        error.trim() == "code EINTEGRITY"
+            || (error.to_ascii_lowercase().contains("/_cacache/") && error.contains("ENOENT"))
+    }) {
+        NpmInstallKind::CacheCorrupt
+    } else if stderr.contains("ETARGET") || stderr.contains(ETARGET_MARKER) {
         NpmInstallKind::TargetNotFound
     } else {
         NpmInstallKind::Other
     }
 }
 
-/// Builds npm's cacache key for a package's packument.
-///
-/// npm keys registry metadata as `make-fetch-happen:request-cache:<url>` with
-/// the scope separator percent-encoded (`@scope/name` → `@scope%2Fname`).
-pub(crate) fn packument_cache_key(registry: &str, name: &str) -> String {
-    let encoded = name.replace('/', "%2F");
-    format!(
-        "make-fetch-happen:request-cache:{}/{}",
-        registry.trim_end_matches('/'),
-        encoded
-    )
+/// Never delete individual entries from the shared cache: npm 11's `cache
+/// clean <key>` also deletes the content blob, which other keys may reference.
+/// Keep recovery downloads isolated, and retain their npm logs for diagnosis.
+fn fresh_retry_cache(cache: &Path) -> Result<PathBuf, String> {
+    let root = cache.join("_retries");
+    fs::create_dir_all(&root).map_err(|error| format!("无法创建 npm 重试缓存目录:{error}"))?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let path = root.join(format!("{}-{timestamp}", std::process::id()));
+    // create_dir fails on collision rather than reusing a potentially bad cache.
+    fs::create_dir(&path).map_err(|error| format!("无法创建 npm 独立缓存目录:{error}"))?;
+    Ok(path)
 }
 
-/// npm has written the scope separator both uppercased (`%2F`) and lowercased
-/// (`%2f`) across versions, and `npm cache clean` matches the key byte for
-/// byte, so both spellings of the package name must be purged. Note that
-/// `str::to_ascii_lowercase` is *not* enough here: it would leave `%2F` intact.
-const PURGE_NAME_VARIANTS: [&str; 2] = [NPM_PACKAGE_TARGET, "@deepseek-ai%2fdsh"];
-
-/// Drops npm's cached packument for `name` so the next install must refetch
-/// metadata from the registry.
-///
-/// This is the repair step for a stale-metadata failure. `npm cache clean`
-/// rewrites the cacache index while holding npm's own lock, so it is safe to
-/// run against the shared cache directory; failures are logged and ignored
-/// because the retry is still worth attempting without the purge.
-fn purge_packument_cache(node: &Path, npm_cli: &Path, cache: &Path, registry: &str) {
-    for name in PURGE_NAME_VARIANTS {
-        let key = packument_cache_key(registry, name);
-        log::debug!("purging cached packument: {key}");
-        let mut cmd = Command::new(node);
-        cmd.arg(npm_cli)
-            .args(["cache", "clean", &key, "--force"])
-            .arg(format!("--cache={}", cache.display()))
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(windows)]
-        cmd.creation_flags(CREATE_NO_WINDOW);
-        match cmd.output() {
-            Ok(output) if output.status.success() => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let deleted = stdout.lines().any(|line| line.starts_with("Deleted:"));
-                if deleted {
-                    log::debug!("npm cache purge removed the stale packument");
-                } else {
-                    log::debug!("npm cache purge found no matching packument entry");
-                }
-            }
-            Ok(output) => log::warn!(
-                "npm cache purge exited with {:?}: {}",
-                output.status.code(),
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-            Err(error) => log::warn!("failed to run npm cache purge: {error}"),
+fn cleanup_retry_cache(cache: &Path) {
+    let content = cache.join("_cacache");
+    if content.exists() {
+        if let Err(error) = super::remove_dir_all_retried(&content) {
+            log::warn!(
+                "failed to remove retry cache {}: {error}",
+                content.display()
+            );
         }
     }
+}
+
+/// Preserve npm's error code, reason, and debug-log location in the update
+/// failure, instead of only reporting an exit code and elapsed time.
+fn npm_error_details(stderr: &str) -> String {
+    stderr
+        .lines()
+        .filter(|line| line.starts_with("npm error ") || line.starts_with("npm ERR! "))
+        .take(12)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Installs the Harness package into `staging`, preferring the exact tarball
@@ -321,8 +323,8 @@ fn purge_packument_cache(node: &Path, npm_cli: &Path, cache: &Path, registry: &s
 /// straight to the tarball sidesteps that inconsistency entirely.
 ///
 /// The version-spec path remains as the fallback for when no tarball URL is
-/// available, and it retries once with a purged packument cache because the
-/// stale metadata can also live in npm's own cache.
+/// available. Both paths retry once with a fresh cache for stale metadata or
+/// corrupt cached downloads, including failures in transitive dependencies.
 #[allow(clippy::too_many_arguments)]
 fn install_harness_package(
     node: &Path,
@@ -369,12 +371,9 @@ fn clear_staging(staging: &Path) -> Result<(), String> {
     fs::create_dir_all(staging).map_err(|error| format!("无法创建更新暂存目录:{error}"))
 }
 
-/// Runs `npm install` for `spec`, and retries once without the local metadata
-/// cache when npm reports that the requested version does not exist.
-///
-/// `spec` is either `@deepseek-ai/dsh@<version>` or a direct tarball URL; only
-/// the former depends on packument resolution, so only it can produce an
-/// `ETARGET` worth repairing here.
+/// Runs `npm install` for `spec`, retrying once in an empty cache on stale
+/// metadata or cache corruption. Direct tarballs can also hit these errors
+/// while npm resolves their dependencies.
 #[allow(clippy::too_many_arguments)]
 fn run_npm_install_with_retry(
     node: &Path,
@@ -388,19 +387,20 @@ fn run_npm_install_with_retry(
     match run_npm_install(node, npm_cli, staging, cache, registry, spec, false) {
         Ok(()) => Ok(()),
         Err((NpmInstallKind::Other, error)) => Err(error),
-        Err((NpmInstallKind::TargetNotFound, error)) => {
+        Err((kind, error)) => {
             log::warn!(
-                "npm could not resolve {spec} from {registry} ({error}); \
-                 discarding the cached packument and retrying with --prefer-online"
+                "npm install {spec} from {registry} failed ({kind:?}: {error}); \
+                 retrying online with a fresh cache"
             );
-            purge_packument_cache(node, npm_cli, cache, registry);
             clear_staging(staging)?;
-
-            match run_npm_install(node, npm_cli, staging, cache, registry, spec, true) {
+            let retry_cache =
+                fresh_retry_cache(cache).map_err(|cache_error| format!("{error} {cache_error}"))?;
+            let result =
+                run_npm_install(node, npm_cli, staging, &retry_cache, registry, spec, true);
+            cleanup_retry_cache(&retry_cache);
+            match result {
                 Ok(()) => {
-                    log::info!(
-                        "Harness {label} installed via {registry} after discarding stale metadata"
-                    );
+                    log::info!("Harness {label} installed via {registry} using a fresh cache");
                     Ok(())
                 }
                 Err((_, retry_error)) => Err(format!("{error} 重试后仍失败：{retry_error}")),
@@ -455,10 +455,11 @@ fn run_npm_install(
             // separate array entries misparses the entire argument chain.
             "--loglevel=verbose",
         ])
-        .args(PREFER_OFFLINE_ARGS)
+        .args(npm_cache_args(prefer_online))
         .args([
             // Retry transient network failures instead of hanging silently.
             "--fetch-retries=3",
+            &format!("--cache={}", cache.display()),
             &format!("--prefix={}", staging.display()),
             &format!("--registry={}", registry),
             // The install target: either `@deepseek-ai/dsh@<version>` or a
@@ -483,9 +484,6 @@ fn run_npm_install(
         // is generous enough for large tarballs on slow connections.
         .env("npm_config_fetch_timeout", "120000")
         .env("npm_config_fetch_retry_mintimeout", "20000");
-    if prefer_online {
-        cmd.env("npm_config_prefer_online", "true");
-    }
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -559,11 +557,12 @@ fn run_npm_install(
                 return Err((
                     kind,
                     format!(
-                        "npm install 失败（退出码 {}，耗时 {:.1}s）。",
+                        "npm install 失败（退出码 {}，耗时 {:.1}s）。\n{}",
                         status
                             .code()
                             .map_or("未知".to_owned(), |code| code.to_string()),
                         elapsed.as_secs_f64(),
+                        npm_error_details(&stderr),
                     ),
                 ));
             }
@@ -734,49 +733,128 @@ mod tests {
     }
 
     #[test]
-    fn builds_packument_cache_keys() {
-        assert_eq!(
-            packument_cache_key("https://registry.npmmirror.com", NPM_PACKAGE_TARGET),
-            "make-fetch-happen:request-cache:https://registry.npmmirror.com/@deepseek-ai%2Fdsh"
-        );
-        assert_eq!(
-            packument_cache_key("https://registry.npmjs.org", NPM_PACKAGE_TARGET),
-            "make-fetch-happen:request-cache:https://registry.npmjs.org/@deepseek-ai%2Fdsh"
-        );
-        // A trailing slash on the registry must not double up.
-        assert_eq!(
-            packument_cache_key("https://registry.npmjs.org/", NPM_PACKAGE_TARGET),
-            "make-fetch-happen:request-cache:https://registry.npmjs.org/@deepseek-ai%2Fdsh"
-        );
+    fn distinguishes_cache_corruption_from_other_filesystem_errors() {
+        for error in [
+            r"npm error enoent Invalid response body: ENOENT: stat 'C:\Users\test\npm-cache\_cacache\content-v2\sha512\f2\17\blob'",
+            "npm error ENOENT: open '/tmp/npm-cache/_cacache/index-v5/entry'",
+            "npm error code EINTEGRITY\nnpm error Integrity verification failed for sha512-test (/tmp/npm-cache/_cacache)",
+            "npm error code EINTEGRITY\nnpm error sha512-test integrity checksum failed when using sha512: wanted sha512-test but got sha512-other. (42 bytes)",
+        ] {
+            assert_eq!(npm_failure_kind(error), NpmInstallKind::CacheCorrupt);
+        }
+        for error in [
+            "npm warn ENOENT: open '/tmp/npm-cache/_cacache/content-v2/blob'\nnpm error code EACCES",
+            "npm error ENOENT: open '/tmp/staging/package.json'",
+            "npm error EACCES: open '/tmp/npm-cache/_cacache/content-v2/blob'",
+            "npm error EINTEGRITY: downloaded tarball checksum mismatch",
+        ] {
+            assert_eq!(npm_failure_kind(error), NpmInstallKind::Other);
+        }
     }
 
     #[test]
-    fn builds_packument_cache_keys_without_duplicated_slashes() {
+    fn retains_actionable_npm_errors() {
+        let stderr = "npm verbose stack internal details\nnpm error code ENOENT\n\
+            npm error enoent missing cache content\n\
+            npm error A complete log of this run can be found in: /tmp/debug.log";
+        let details = npm_error_details(stderr);
+        assert!(details.contains("code ENOENT"));
+        assert!(details.contains("missing cache content"));
+        assert!(details.contains("/tmp/debug.log"));
+        assert!(!details.contains("internal details"));
         assert_eq!(
-            packument_cache_key("https://registry.npmjs.org", NPM_PACKAGE_TARGET),
-            "make-fetch-happen:request-cache:https://registry.npmjs.org/@deepseek-ai%2Fdsh"
-        );
-        // A trailing slash on the registry must not double up.
-        assert_eq!(
-            packument_cache_key("https://registry.npmjs.org/", NPM_PACKAGE_TARGET),
-            "make-fetch-happen:request-cache:https://registry.npmjs.org/@deepseek-ai%2Fdsh"
+            npm_error_details("npm ERR! code ETARGET"),
+            "npm ERR! code ETARGET"
         );
     }
 
+    /// Runs the real subprocess/retry code with a deterministic npm stand-in.
+    /// No registry downloads; Node.js is the only external requirement.
     #[test]
-    fn purge_covers_both_scope_encodings() {
-        // The two keys npm has used for the same packument. The second entry
-        // must be spelled out, because `to_ascii_lowercase` would leave `%2F`
-        // intact and silently purge the same key twice.
-        assert_ne!(PURGE_NAME_VARIANTS[0], PURGE_NAME_VARIANTS[1]);
-        assert_eq!(
-            packument_cache_key("https://registry.npmjs.org", PURGE_NAME_VARIANTS[1]),
-            "make-fetch-happen:request-cache:https://registry.npmjs.org/@deepseek-ai%2fdsh"
-        );
-        let lowercased = PURGE_NAME_VARIANTS[0].to_ascii_lowercase();
-        assert_eq!(
-            lowercased, PURGE_NAME_VARIANTS[0],
-            "the guard case: lowercasing the name does not change the escape"
-        );
+    #[ignore = "requires Node.js; run explicitly with DSH_TEST_NODE if needed"]
+    fn retries_with_fresh_cache_and_online_flags() {
+        let node = std::env::var_os("DSH_TEST_NODE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("node"));
+        let root = std::env::temp_dir().join(format!(
+            "dsh-npm-retry-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let cli = root.join("npm.cjs");
+        fs::write(
+            &cli,
+            r#"
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const cache = args.find(a => a.startsWith('--cache=')).slice(8);
+const root = __dirname;
+const marker = path.join(root, 'attempt.json');
+const retry = fs.existsSync(marker);
+if (!retry) {
+  fs.writeFileSync(marker, JSON.stringify({cache, args}));
+  fs.writeFileSync('partial-install', 'incomplete');
+  console.error(fs.readFileSync(path.join(root, 'failure.txt'), 'utf8'));
+  process.exit(1);
+}
+const first = JSON.parse(fs.readFileSync(marker, 'utf8'));
+const valid = cache !== first.cache
+  && fs.readdirSync(cache).length === 0
+  && args.includes('--prefer-online')
+  && args.includes('--prefer-offline=false')
+  && args.includes('--offline=false')
+  && !args.includes('--prefer-offline')
+  && first.args.includes('--prefer-offline')
+  && !fs.existsSync('partial-install');
+if (!valid) { console.error('npm error invalid retry configuration'); process.exit(2); }
+fs.mkdirSync(path.join(cache, '_cacache'));
+fs.mkdirSync(path.join(cache, '_logs'));
+fs.writeFileSync(path.join(cache, '_logs', 'debug.log'), 'retry log');
+fs.writeFileSync(path.join(root, 'retry-cache.txt'), cache);
+const failure = fs.readFileSync(path.join(root, 'failure.txt'), 'utf8');
+if (failure.includes('fail-twice')) { console.error(failure); process.exit(1); }
+"#,
+        )
+        .unwrap();
+        let staging = root.join("staging");
+        let cache = root.join("shared-cache");
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache.join("keep"), "shared cache remains intact").unwrap();
+        for (failure, retried, succeeds) in [
+            (r"npm error ENOENT: stat 'C:\cache\_cacache\content-v2\blob'", true, true),
+            ("npm error code ETARGET\nnpm error No matching version found for @deepseek-ai/dependency@1.0.0", true, true),
+            ("npm error code EINTEGRITY\nnpm error integrity checksum failed when using sha512", true, true),
+            ("npm error code EINTEGRITY\nnpm error fail-twice", true, false),
+            ("npm error code ETARGET\nnpm error fail-twice", true, false),
+            ("npm error code EAI_AGAIN", false, false),
+        ] {
+            clear_staging(&staging).unwrap();
+            let _ = fs::remove_file(root.join("attempt.json"));
+            let _ = fs::remove_file(root.join("retry-cache.txt"));
+            fs::write(root.join("failure.txt"), failure).unwrap();
+            let result = run_npm_install_with_retry(
+                &node, &cli, &staging, &cache, "https://registry.invalid",
+                "https://registry.invalid/dsh.tgz", "test tarball",
+            );
+            assert_eq!(result.is_ok(), succeeds, "{result:?}");
+            assert_eq!(root.join("retry-cache.txt").exists(), retried);
+            if retried {
+                let retry_cache = PathBuf::from(fs::read_to_string(root.join("retry-cache.txt")).unwrap());
+                assert!(!retry_cache.join("_cacache").exists());
+                assert!(retry_cache.join("_logs/debug.log").is_file());
+            }
+            if !succeeds {
+                let error = result.unwrap_err();
+                assert!(error.contains(failure));
+                assert_eq!(error.contains("重试后仍失败"), retried);
+            }
+            assert_eq!(fs::read_to_string(cache.join("keep")).unwrap(), "shared cache remains intact");
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 }
