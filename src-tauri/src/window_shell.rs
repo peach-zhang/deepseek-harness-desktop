@@ -7,8 +7,9 @@ const TITLEBAR_HEIGHT: f64 = 36.0;
 /// 信息面板（版本历史）与窗口右边缘/上边缘的留白。
 const INFO_PANEL_MARGIN: f64 = 12.0;
 /// 信息面板的期望尺寸；窗口更小时会按可用空间收缩。
+/// 高度按当前内容估算:头部 + 四行版本信息 + 手动检查更新区块。
 const INFO_PANEL_WIDTH: f64 = 340.0;
-const INFO_PANEL_HEIGHT: f64 = 360.0;
+const INFO_PANEL_HEIGHT: f64 = 260.0;
 /// 面板至少保留这么高，否则不再展示（窗口过矮时直接隐藏内容区）。
 const INFO_PANEL_MIN_HEIGHT: f64 = 120.0;
 

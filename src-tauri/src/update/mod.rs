@@ -257,6 +257,28 @@ pub(crate) fn select_harness_runtime(
     }
 }
 
+/// Manual update check: resolves the newest published Harness version from the
+/// configured registries without touching the installed runtime. Mirrors the
+/// lookup order (and fallback) of [`select_harness_runtime`].
+pub(crate) fn registry_latest_version() -> Result<Version, String> {
+    let registries = registry_candidates();
+    let agent = http_agent(CHECK_TIMEOUT);
+    let mut last_error: Option<String> = None;
+    for registry in &registries {
+        let metadata_url = format!("{registry}/{DSH_METADATA_PATH}");
+        match fetch_json(&agent, &metadata_url) {
+            Ok(metadata) => {
+                if let Some(version) = latest_candidate(&metadata) {
+                    return Ok(version);
+                }
+                last_error = Some(format!("registry 元数据中没有可用版本（{registry}）"));
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "没有可用的 registry 配置".to_owned()))
+}
+
 fn node_sidecar_path() -> Result<std::path::PathBuf, String> {
     let exe = std::env::current_exe().map_err(|error| format!("无法定位应用可执行文件:{error}"))?;
     let directory = exe

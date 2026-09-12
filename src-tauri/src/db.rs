@@ -14,20 +14,10 @@ use std::{
 };
 
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
 
 #[derive(Clone)]
 pub(crate) struct DesktopDb {
     conn: Arc<Mutex<Connection>>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct HarnessHistoryEntry {
-    pub version: String,
-    pub install_time: String,
-    pub source: String,
-    pub is_current: bool,
 }
 
 impl DesktopDb {
@@ -131,34 +121,8 @@ impl DesktopDb {
         Ok(())
     }
 
-    /// Returns all installed Harness versions, most recent first.
-    pub(crate) fn harness_history(&self) -> Result<Vec<HarnessHistoryEntry>, String> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| "数据库锁中毒".to_owned())?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT version, install_time, source, is_current
-                 FROM harness_history
-                 ORDER BY install_time DESC, id DESC",
-            )
-            .map_err(|error| format!("查询版本历史失败：{error}"))?;
-
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(HarnessHistoryEntry {
-                    version: row.get(0)?,
-                    install_time: row.get(1)?,
-                    source: row.get(2)?,
-                    is_current: row.get::<_, i32>(3)? != 0,
-                })
-            })
-            .map_err(|error| format!("读取版本历史失败：{error}"))?;
-
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|error| format!("读取版本历史失败：{error}"))
-    }
+    // 注:版本历史不再在版本信息面板中展示,但写入依然保留 —— 数据继续
+    // 积累,便于诊断或未来恢复展示。
 }
 
 /// Current UTC time as an ISO-8601 string, without pulling in chrono.
@@ -226,11 +190,20 @@ mod tests {
         let db = temp_db();
         db.record_harness_version("0.1.0-rc.5", "bundled").unwrap();
         db.record_harness_version("0.1.0-rc.7", "update").unwrap();
-        let history = db.harness_history().unwrap();
-        assert_eq!(history.len(), 2);
-        assert_eq!(history[0].version, "0.1.0-rc.7");
-        assert!(history[0].is_current);
-        assert!(!history[1].is_current);
+        // 读取通路已随面板的历史区块一起移除,测试直接查表验证写入语义。
+        let conn = db.conn.lock().unwrap();
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM harness_history", [], |row| row.get(0))
+            .unwrap();
+        let current: String = conn
+            .query_row(
+                "SELECT version FROM harness_history WHERE is_current = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(current, "0.1.0-rc.7");
     }
 
     #[test]
@@ -238,9 +211,11 @@ mod tests {
         let db = temp_db();
         db.record_harness_version("0.1.0-rc.7", "bundled").unwrap();
         db.record_harness_version("0.1.0-rc.7", "bundled").unwrap();
-        let history = db.harness_history().unwrap();
-        assert_eq!(history.len(), 1);
-        assert!(history[0].is_current);
+        let conn = db.conn.lock().unwrap();
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM harness_history", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(total, 1);
     }
 
     #[test]
