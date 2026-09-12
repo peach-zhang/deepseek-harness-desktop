@@ -177,7 +177,7 @@ describe('本地文档主题订阅', () => {
 
 describe('两个本地文档都接入共享主题模块', () => {
   it('版本信息面板导入并订阅主题', () => {
-    const info = source('./info.ts')
+    const info = source('./info.tsx')
     // Regression guard: the panel is its own document, so without this it kept
     // the light design tokens while the rest of the shell switched to dark.
     expect(info).toContain("from './theme'")
@@ -185,7 +185,7 @@ describe('两个本地文档都接入共享主题模块', () => {
   })
 
   it('主窗口改用共享模块，不再自带重复实现', () => {
-    const main = source('./main.ts')
+    const main = source('./main.tsx')
     expect(main).toContain("from './theme'")
     expect(main).toContain('subscribeTheme(')
     // The old local copy duplicated the resolution and the event wiring.

@@ -35,6 +35,21 @@ describe('自定义窗口壳层契约', () => {
     expect(backend).toContain('allows_harness_navigation(url)')
     expect(source('../src-tauri/src/app.rs')).toContain('allows_bootstrap_navigation(url)')
   })
+
+  it('关闭按钮隐藏窗口驻留托盘，而不是退出应用', () => {
+    // 前端按钮直接隐藏;Alt+F4 等原生关闭请求在 Rust 侧同样被拦截。
+    const titlebar = source('./components/Titlebar.tsx')
+    expect(titlebar).toContain('win.hide()')
+    expect(titlebar).not.toContain('win.close()')
+    const app = source('../src-tauri/src/app.rs')
+    expect(app).toContain('WindowEvent::CloseRequested { api, .. }')
+    expect(app).toContain('api.prevent_close()')
+    expect(app).toContain('crate::tray::setup(app.handle())')
+    // 托盘提供唤回与真正退出的入口。
+    const tray = source('../src-tauri/src/tray.rs')
+    expect(tray).toContain('show_main_window')
+    expect(tray).toContain('app.exit(0)')
+  })
 })
 
 describe('版本信息面板契约', () => {
@@ -51,14 +66,16 @@ describe('版本信息面板契约', () => {
     const config = source('../vite.config.ts')
     expect(config).toContain("resolve(import.meta.dirname, 'index.html')")
     expect(config).toContain("resolve(import.meta.dirname, 'info.html')")
-    expect(source('../info.html')).toContain('src="/src/info.ts"')
+    expect(source('../info.html')).toContain('src="/src/info.tsx"')
+    expect(source('../index.html')).toContain('src="/src/main.tsx"')
   })
 
   it('标题栏入口与面板状态保持同步', () => {
-    const main = source('./main.ts')
+    const main = source('./main.tsx')
     expect(main).toContain("invoke<boolean>('toggle_desktop_info')")
     expect(main).toContain("listen<boolean>('desktop-info'")
-    expect(main).toContain('id="win-info"')
+    // The info toggle button itself lives in the Titlebar component.
+    expect(source('./components/Titlebar.tsx')).toContain('id="win-info"')
   })
 
   it('面板在 Harness 出现后重建，避免被 z-order 遮挡', () => {
@@ -79,6 +96,22 @@ describe('版本信息面板契约', () => {
     const body = css.match(/\.info-body\s*\{[^}]*\}/s)?.[0] ?? ''
     expect(body).toContain('overflow-y: auto')
     expect(body).toContain('overscroll-behavior: contain')
+  })
+
+  it('面板提供手动检查更新，安装复用后端重启链路', () => {
+    const commands = source('../src-tauri/src/commands.rs')
+    // 只查询不安装:命令解析 registry 最新版本并刷新 last_update_check。
+    expect(commands).toContain('pub(crate) async fn check_harness_update')
+    expect(commands).toContain('crate::update::registry_latest_version')
+    expect(commands).toContain('db.set_meta("last_update_check"')
+    expect(source('../src-tauri/src/app.rs')).toContain('commands::check_harness_update')
+    const update = source('./components/UpdateCheck.tsx')
+    expect(update).toContain("invoke<UpdateCheckResult>('check_harness_update')")
+    // 安装走 restart_backend:start 周期自动下载安装并汇报进度。
+    expect(update).toContain("invoke('restart_backend')")
+    // 更新需要面板内联二次确认,避免误触直接重启 Harness。
+    expect(update).toContain('confirming')
+    expect(update).toContain('确认更新')
   })
 
   it('切换前先采样面板状态，否则关闭后会立刻被重建', () => {
