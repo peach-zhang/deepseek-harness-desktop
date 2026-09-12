@@ -8,6 +8,7 @@ mod platform;
 mod plugins;
 mod runtime;
 mod theme;
+mod tray;
 mod update;
 mod window_shell;
 

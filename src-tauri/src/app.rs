@@ -35,6 +35,7 @@ pub fn run() {
             backend::commands::backend_status,
             backend::commands::restart_backend,
             commands::get_desktop_info,
+            commands::check_harness_update,
             commands::toggle_desktop_info,
             theme::get_harness_theme,
         ])
@@ -65,12 +66,24 @@ pub fn run() {
             }
             let layout_window = window.clone();
             window.on_window_event(move |event| {
-                if matches!(event, WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }) {
-                    if let Err(error) = crate::window_shell::resize_webviews(&layout_window) {
-                        log::warn!("无法调整窗口内容区域：{error}");
+                match event {
+                    // 关闭只隐藏窗口:内置 Harness 继续在后台运行,由托盘
+                    // 图标或再次启动应用唤回;真正退出走托盘菜单。
+                    WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        let _ = layout_window.hide();
                     }
+                    WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+                        if let Err(error) = crate::window_shell::resize_webviews(&layout_window) {
+                            log::warn!("无法调整窗口内容区域：{error}");
+                        }
+                    }
+                    _ => {}
                 }
             });
+
+            // 托盘在主窗口创建之后注册,保证隐藏驻留期间有恢复入口。
+            crate::tray::setup(app.handle())?;
 
             // Initialize SQLite database
             let data_dir = app
