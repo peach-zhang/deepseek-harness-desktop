@@ -9,11 +9,23 @@ use crate::db;
 use crate::theme;
 use crate::HARNESS_VERSION;
 
+/// 窗口状态记忆的恢复/保存范围:刻意排除 VISIBLE —— 从托盘退出时主窗口
+/// 是隐藏的,若把可见性也存下来,下次启动将"看不到窗口"。
+fn window_state_flags() -> tauri_plugin_window_state::StateFlags {
+    tauri_plugin_window_state::StateFlags::all()
+        & !tauri_plugin_window_state::StateFlags::VISIBLE
+}
+
 pub fn run() {
     let manager = BackendManager::default();
     let manager_for_setup = manager.clone();
 
     let app = tauri::Builder::default()
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(window_state_flags())
+                .build(),
+        )
         .plugin(
             tauri_plugin_log::Builder::new()
                 // The update HTTP client is very chatty at dev log levels.
@@ -22,6 +34,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -72,6 +85,7 @@ pub fn run() {
                     WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
                         let _ = layout_window.hide();
+                        crate::tray::notify_hidden_once(layout_window.app_handle());
                     }
                     WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
                         if let Err(error) = crate::window_shell::resize_webviews(&layout_window) {
@@ -84,6 +98,15 @@ pub fn run() {
 
             // 托盘在主窗口创建之后注册,保证隐藏驻留期间有恢复入口。
             crate::tray::setup(app.handle())?;
+
+            // 窗口以隐藏状态创建:先恢复上次的位置/尺寸/最大化,修正布局后
+            // 再显示,避免先在默认位置闪现。首次启动没有存档,直接显示。
+            use tauri_plugin_window_state::WindowExt;
+            if let Err(error) = window.restore_state(window_state_flags()) {
+                log::warn!("无法恢复窗口状态：{error}");
+            }
+            let _ = crate::window_shell::resize_webviews(&window);
+            let _ = window.show();
 
             // Initialize SQLite database
             let data_dir = app

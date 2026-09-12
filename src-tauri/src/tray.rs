@@ -51,3 +51,21 @@ pub(crate) fn show_main_window(app: &AppHandle) {
         let _ = window.set_focus();
     }
 }
+
+/// 首次因关闭而驻留时,用系统通知告知窗口去向,之后不再打扰。
+pub(crate) fn notify_hidden_once(app: &AppHandle) {
+    use tauri_plugin_notification::NotificationExt;
+
+    const HINT_KEY: &str = "tray_hint_shown";
+    let db = app.state::<crate::db::DesktopDb>();
+    if db.get_meta(HINT_KEY).ok().flatten().as_deref() == Some("1") {
+        return;
+    }
+    let _ = db.set_meta(HINT_KEY, "1");
+    let _ = app
+        .notification()
+        .builder()
+        .title("DSH Desktop 仍在运行")
+        .body("窗口已最小化到系统托盘，点击托盘图标可随时恢复。")
+        .show();
+}

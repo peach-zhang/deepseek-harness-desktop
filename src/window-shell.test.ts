@@ -50,6 +50,21 @@ describe('自定义窗口壳层契约', () => {
     expect(tray).toContain('show_main_window')
     expect(tray).toContain('app.exit(0)')
   })
+
+  it('窗口位置与尺寸跨启动保留，但可见性不参与恢复', () => {
+    const app = source('../src-tauri/src/app.rs')
+    expect(app).toContain('tauri_plugin_window_state')
+    expect(app).toContain('window.restore_state(window_state_flags())')
+    // 从托盘退出时主窗口是隐藏的;若恢复可见性，下次启动将看不到窗口。
+    expect(app).toContain('& !tauri_plugin_window_state::StateFlags::VISIBLE')
+  })
+
+  it('首次隐藏到托盘时用系统通知告知去向，且只提示一次', () => {
+    const tray = source('../src-tauri/src/tray.rs')
+    expect(tray).toContain('pub(crate) fn notify_hidden_once')
+    expect(tray).toContain("HINT_KEY")
+    expect(source('../src-tauri/src/app.rs')).toContain('crate::tray::notify_hidden_once')
+  })
 })
 
 describe('版本信息面板契约', () => {
@@ -123,7 +138,7 @@ describe('版本信息面板契约', () => {
     // Webview::close 会同步注销面板，关闭后再查 get_webview 只会得到 None，
     // 所以打开状态必须在关闭之前采样。
     expect(sample).toBeGreaterThan(-1)
-    expect(sample).toBeLessThan(close)
+    expect(sample).toBeLessThan(close) 
     expect(close).toBeLessThan(create)
     expect(toggle).toContain('if was_open {')
     expect(toggle).not.toContain('if app.get_webview(INFO_WEBVIEW).is_some()')
